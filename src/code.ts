@@ -15,6 +15,9 @@ type Overrides = { [tag: string]: { min: number; max: number } }
 type Detection = { status: 'detecting' | 'done' | 'error'; ranges: AxisRange[] | null; progress?: { done: number; total: number; tag: string } }
 let uploaded: FontMeta | null = null
 let busy = false
+// Every letter change costs time proportional to the text length, so live editing gets
+// quadratically slower. 100 characters keeps a slider step well under a second.
+const MAX_CHARS = 100
 const detections = new Map<string, Detection>()
 // Manually corrected axis ranges per family, persisted in clientStorage.
 const overrides = new Map<string, Overrides>()
@@ -85,7 +88,7 @@ function selectionInfo(): Info {
   if (!node) return fail('Select exactly one text layer.')
   if (locked(node)) return fail('The text layer or a parent layer is locked.')
   if (!node.characters.length) return fail('The selected text is empty.')
-  if (node.characters.length > 30000) return fail('Select text with no more than 30,000 characters.')
+  if (node.characters.length > MAX_CHARS) return fail(`This text is too long (${node.characters.length} characters). Font Axis Gradient works on texts up to ${MAX_CHARS} characters, such as headlines.`)
   if (node.hasMissingFont) return fail('This font is unavailable in Figma. Install or enable it first.')
   const fonts = node.getRangeAllFontNames(0, node.characters.length)
   const families = [...new Set(fonts.map(f => f.family))]
@@ -167,9 +170,11 @@ async function ensureDetection(info: Info): Promise<void> {
   refresh()
 }
 
+let known: { id?: string; family: string; characters: string; error: string } = { family: '', characters: '', error: '' }
 function refresh(): void {
   try {
     const info = selectionInfo()
+    known = { id: info.node?.id, family: info.family, characters: info.node?.characters || '', error: info.error }
     const saved = info.node ? readSaved(info.node) : null
     const fileError = uploaded && info.family && !fileMatches(info.family) ? 'The loaded font file is ' + uploaded.families[0] + ', not ' + info.family + '.' : ''
     const detection = info.family ? detections.get(info.family) : undefined
@@ -197,73 +202,123 @@ async function loadFonts(node: TextNode, extra: FontRange[] = []): Promise<void>
   for (const f of fonts) unique.set(JSON.stringify(f), f)
   await Promise.all([...unique.values()].map(f => figma.loadFontAsync(f)))
 }
-async function apply(msg: Message): Promise<void> {
+type Prepared = { node: TextNode; settings: Settings; groups: Glyph[][] }
+type PlanItem = { start: number; end: number; font: FontName; values: { [tag: string]: number } }
+
+// Validate a live edit against the current selection and axis ranges.
+function prepare(msg: Message): Prepared | { error: string; stale?: boolean } {
   const settings = normalizeSettings(msg.settings)
   const info = selectionInfo(), node = info.node, axes = adjustableAxes(info)
-  if (info.error || !node) { postStatus(info.error || 'Select a text layer.', true); return }
-  if (!axes) { postStatus('The axis ranges are still being measured.', true); return }
-  if (!settings) { postStatus('Invalid settings. Try again.', true); return }
-  if (node.id !== msg.id || node.characters !== msg.characters) { refresh(); postStatus('The selection changed. Apply again.', true); return }
+  if (info.error || !node) return { error: info.error || 'Select a text layer.' }
+  if (!axes) return { error: 'The axis ranges are still being measured.' }
+  if (!settings) return { error: 'Invalid settings. Try again.' }
+  if (node.id !== msg.id || node.characters !== msg.characters) return { error: 'The selection changed. Apply again.', stale: true }
   const enabled = Object.entries(settings.axes).filter(([, a]) => a.enabled)
-  if (!enabled.length) { postStatus('Turn on at least one axis.', true); return }
+  if (!enabled.length) return { error: 'Turn on at least one axis.' }
   for (const [tag, a] of enabled) {
     const range = axes.find(r => r.tag === tag)
-    if (!range) { postStatus(`The ${tag} axis is not adjustable for this font.`, true); return }
+    if (!range) return { error: `The ${tag} axis is not adjustable for this font.` }
     const outside = (v: number) => v < range.min - 1e-6 || v > range.max + 1e-6
-    if (outside(a.base) || outside(a.peak)) { postStatus(`${range.name} must stay between ${range.min} and ${range.max}.`, true); return }
+    if (outside(a.base) || outside(a.peak)) return { error: `${range.name} must stay between ${range.min} and ${range.max}.` }
   }
   const groups = msg.groups
-  if (!groups || groups.length > 30000) { postStatus('Could not split the text into characters.', true); return }
+  if (!groups || groups.length > 30000) return { error: 'Could not split the text into characters.' }
   let last = 0, glyphCount = 0
   for (const group of groups) {
     for (const g of group) {
-      if (!Number.isInteger(g.start) || !Number.isInteger(g.end) || g.start < last || g.end <= g.start || g.end > node.characters.length || /\s/.test(node.characters.slice(g.start, g.end))) { postStatus('Invalid character segmentation. Try again.', true); return }
+      if (!Number.isInteger(g.start) || !Number.isInteger(g.end) || g.start < last || g.end <= g.start || g.end > node.characters.length || /\s/.test(node.characters.slice(g.start, g.end))) return { error: 'Invalid character segmentation. Try again.' }
       last = g.end
       glyphCount++
     }
   }
-  if (!glyphCount || glyphCount > 10000) { postStatus('Select between 1 and 10,000 visible characters.', true); return }
-  const before = node.getStyledTextSegments(['fontName']).map(r => ({ start: r.start, end: r.end, fontName: r.fontName }))
-  try { await loadFonts(node) }
-  catch { postStatus('Could not load the font. Install or enable it in Figma.', true); return }
-  if (selected()?.id !== node.id || node.characters !== msg.characters || locked(node)) { refresh(); postStatus('The selection changed. Apply again.', true); return }
-  const saved = readSaved(node)
-  const original = saved?.original.characters === node.characters ? saved.original : { characters: node.characters, ranges: before }
-  const plan: { start: number; end: number; font: FontName; values: { [tag: string]: number } }[] = []
+  if (!glyphCount) return { error: 'The text has no visible characters.' }
+  return { node, settings, groups }
+}
+
+// Per-letter font ranges: only the enabled axes change, every other axis keeps its value.
+function buildPlan(groups: Glyph[][], settings: Settings, before: FontRange[]): PlanItem[] {
+  const plan: PlanItem[] = []
   for (const group of groups) {
     const values = computeValues(group.length, settings)
     for (let i = 0; i < group.length; i++) {
       const g = group[i]
       for (const r of before) {
         const start = Math.max(r.start, g.start), end = Math.min(r.end, g.end)
-        // Merge: only the enabled axes change, every other axis keeps its current value.
         if (start < end) plan.push({ start, end, values: values[i], font: { ...r.fontName, variationSettings: { ...r.fontName.variationSettings, ...values[i] } } })
       }
     }
   }
-  try {
-    for (const r of plan) node.setRangeFontName(r.start, r.end, r.font)
-    for (const r of plan) {
-      const actual = node.getRangeFontName(r.start, r.end)
-      const ok = actual !== figma.mixed && Object.entries(r.values).every(([tag, v]) => typeof actual.variationSettings?.[tag] === 'number' && Math.abs(actual.variationSettings[tag] - v) <= 0.05)
-      if (!ok) {
-        for (const old of before) node.setRangeFontName(old.start, old.end, old.fontName)
-        postStatus('Figma did not apply the requested values. The text was reset.', true)
-        return
-      }
-    }
-    node.setPluginData(KEY, JSON.stringify({ version: 2, settings, original } satisfies Saved))
-    node.setRelaunchData({ ...node.getRelaunchData(), [TOOL_ID]: 'Font Axis Gradient' })
-    figma.commitUndo()
-  } catch (error) {
-    for (const r of before) node.setRangeFontName(r.start, r.end, r.fontName)
-    throw error
-  }
-  refresh()
-  const names = enabled.map(([tag]) => axes.find(r => r.tag === tag)?.name || tag)
-  postStatus(`${glyphCount} ${glyphCount === 1 ? 'character' : 'characters'} updated · ${names.join(', ')}`)
+  return plan
 }
+function fontRanges(node: TextNode): FontRange[] {
+  return node.getStyledTextSegments(['fontName']).map(r => ({ start: r.start, end: r.end, fontName: r.fontName }))
+}
+
+// Neighbouring letters with identical values become one call: each setRangeFontName costs
+// time proportional to the text length, so fewer calls is the only real speed-up.
+function mergePlan(plan: PlanItem[]): PlanItem[] {
+  const out: PlanItem[] = []
+  for (const r of plan) {
+    const last = out[out.length - 1]
+    if (last && last.end === r.start && JSON.stringify(last.font) === JSON.stringify(r.font)) last.end = r.end
+    else out.push({ ...r })
+  }
+  return out
+}
+
+// ---------- live editing ----------
+// Changes go straight onto the selected text. They are not committed to the undo history
+// until Done, a selection change or closing the plugin, so a whole session is one undo step.
+let liveRunning = false
+let liveNext: Message | null = null
+let liveDirty = false
+function requestLive(msg: Message): void {
+  if (liveRunning) { liveNext = msg; return }
+  liveRunning = true
+  applyLive(msg)
+    .catch(() => postStatus('Could not update the text.', true))
+    .finally(() => {
+      liveRunning = false
+      const next = liveNext
+      liveNext = null
+      if (next && !busy) requestLive(next)
+    })
+}
+async function waitForLive(): Promise<void> {
+  liveNext = null
+  while (liveRunning) await new Promise<void>(resolve => setTimeout(resolve, 10))
+}
+async function applyLive(msg: Message): Promise<void> {
+  const prepared = prepare(msg)
+  if ('error' in prepared) { if (prepared.stale) refresh(); else postStatus(prepared.error, true); return }
+  const { node, settings, groups } = prepared
+  try { await loadFonts(node) }
+  catch { postStatus('Could not load the font. Install or enable it in Figma.', true); return }
+  if (busy || selected()?.id !== node.id || node.characters !== msg.characters || locked(node)) return
+  const before = fontRanges(node)
+  const saved = readSaved(node)
+  // Remember the state before the first change so Restore can always go back to it.
+  const original = saved?.original.characters === node.characters ? saved.original : { characters: node.characters, ranges: before }
+  const firstChange = !saved || saved.original.characters !== node.characters
+  for (const r of mergePlan(buildPlan(groups, settings, before))) node.setRangeFontName(r.start, r.end, r.font)
+  node.setPluginData(KEY, JSON.stringify({ version: 2, settings, original } satisfies Saved))
+  if (firstChange) node.setRelaunchData({ ...node.getRelaunchData(), [TOOL_ID]: 'Font Axis Gradient' })
+  liveDirty = true
+  figma.ui.postMessage({ type: 'live-applied', id: node.id, canRestore: true })
+}
+function commitLive(): void {
+  if (!liveDirty) return
+  liveDirty = false
+  figma.commitUndo()
+}
+async function done(): Promise<void> {
+  await waitForLive()
+  commitLive()
+  figma.closePlugin()
+}
+
 async function restore(): Promise<void> {
+  await waitForLive()
   const node = selected()
   if (!node || locked(node)) { postStatus('Select an unlocked text layer.', true); return }
   const saved = readSaved(node)
@@ -273,13 +328,14 @@ async function restore(): Promise<void> {
   if (selected()?.id !== node.id || saved.original.characters !== node.characters || locked(node)) { refresh(); return }
   for (const r of saved.original.ranges) node.setRangeFontName(r.start, r.end, r.fontName)
   node.setPluginData(KEY, '')
+  liveDirty = false
   figma.commitUndo()
   refresh()
   postStatus('Original font settings restored.')
 }
 
 figma.showUI(__html__, { width: 300, height: 320, themeColors: true })
-figma.on('selectionchange', () => { if (!busy) refresh() })
+figma.on('selectionchange', () => { commitLive(); if (!busy) refresh() })
 
 // Font (or text) changes on the selected layer don't fire selectionchange; watch the page.
 let watchedPage: PageNode | null = null
@@ -292,7 +348,12 @@ function onNodeChange(event: NodeChangeEvent): void {
   const relevant = event.nodeChanges.some(c => c.id === node.id && (c.type !== 'PROPERTY_CHANGE' || c.properties.some(p => WATCHED.includes(p))))
   if (!relevant) return
   if (changeTimer !== undefined) clearTimeout(changeTimer)
-  changeTimer = setTimeout(refresh, 120)
+  changeTimer = setTimeout(() => {
+    // Live edits only change variation values; refresh only when family or text changed.
+    const info = selectionInfo()
+    if (info.node?.id === known.id && info.family === known.family && info.node?.characters === known.characters && !info.error === !known.error) return
+    refresh()
+  }, 120)
 }
 function watchPage(): void {
   if (watchedPage === figma.currentPage) return
@@ -306,6 +367,8 @@ figma.ui.onmessage = async (msg: Message) => {
   if (msg.type === 'resize' && typeof msg.height === 'number' && Number.isFinite(msg.height)) { figma.ui.resize(300, Math.max(100, Math.min(760, Math.round(msg.height)))); return }
   if (msg.type === 'ready') { refresh(); return }
   if (busy) return
+  if (msg.type === 'live') { requestLive(msg); return }
+  if (msg.type === 'done') { await done(); return }
   if (msg.type === 'range-override') { await setOverride(msg); return }
   if (msg.type === 'file') {
     uploaded = null
@@ -316,10 +379,10 @@ figma.ui.onmessage = async (msg: Message) => {
     postStatus(`${uploaded.axes.length} ${uploaded.axes.length === 1 ? 'axis' : 'axes'} read from ${uploaded.families[0]}`)
     return
   }
-  if (msg.type !== 'apply' && msg.type !== 'restore') return
+  if (msg.type !== 'restore') return
   busy = true
   figma.ui.postMessage({ type: 'busy', busy: true })
-  try { if (msg.type === 'apply') await apply(msg); else await restore() }
+  try { await restore() }
   catch (error) { postStatus('Could not complete the change.', true); throw error }
   finally { busy = false; figma.ui.postMessage({ type: 'busy', busy: false }) }
 }

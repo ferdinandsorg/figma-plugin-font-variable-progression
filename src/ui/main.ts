@@ -22,7 +22,10 @@ type Control = HTMLElement & { value?: string; checked?: boolean }
 const $ = <T extends HTMLElement = Control>(id: string) => document.getElementById(id) as T
 const send = (msg: object) => parent.postMessage({ pluginMessage: msg }, '*')
 const fmt = (v: number) => Number(v.toFixed(2)).toLocaleString('en')
-const PREVIEW_LIMIT = 24
+// The bar preview shows a window of this many letters; arrows move it through longer texts.
+const BAR_WINDOW = 16
+const ICON_LEFT = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M7.5 2.5L4 6l3.5 3.5"/></svg>'
+const ICON_RIGHT = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M4.5 2.5L8 6l-3.5 3.5"/></svg>'
 const ICON_LINK = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M6.5 9.5l3-3M7 4.8l1-1a2.5 2.5 0 013.5 3.5l-1 1M9 11.2l-1 1a2.5 2.5 0 01-3.5-3.5l1-1"/></svg>'
 const ICON_UNLINK = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M7 4.8l1-1a2.5 2.5 0 013.5 3.5l-1 1M9 11.2l-1 1a2.5 2.5 0 01-3.5-3.5l1-1M3 3l1.5 1.5M13 13l-1.5-1.5"/></svg>'
 const ICON_EDIT = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M10.5 3.5l2 2L6 12H4v-2z"/></svg>'
@@ -32,7 +35,9 @@ let settings: Settings = { version: 2, axes: {}, shape: { ...DEFAULT_SHAPE }, mo
 let busy = false, uploading = false, uploadVersion = 0, connected = false
 let lastId: string | undefined, lastFamily: string | undefined
 let showValues = false
-let activeAction: 'apply' | 'restore' = 'apply'
+/** First letter shown in the bar window. */
+let barOffset = 0
+let liveTimer: ReturnType<typeof setTimeout> | undefined
 /** Which progression the controls edit: null = shared, otherwise a detached axis tag. */
 let target: string | null = null
 let editingRange: string | null = null
@@ -189,14 +194,14 @@ function axisElement(a: AxisRange): HTMLElement {
   range.title = (a.source === 'registered' ? 'Assumed from the OpenType spec · ' : a.source === 'manual' ? 'Set manually · ' : '') + 'Default ' + fmt(a.defaultValue)
   const toggle = document.createElement('fig-switch') as Control
   toggle.setAttribute('aria-label', 'Use ' + a.name)
-  toggle.addEventListener('change', e => { const s = settings.axes[a.tag]; if (s) { s.enabled = eventChecked(e); update() } })
+  toggle.addEventListener('change', e => { const s = settings.axes[a.tag]; if (s) { s.enabled = eventChecked(e); edited() } })
   const actions = document.createElement('div'); actions.className = 'axis-actions'
   const link = iconButton('link', ICON_LINK, 'Detach progression')
   link.addEventListener('click', () => {
     const s = settings.axes[a.tag]; if (!s) return
     if (s.shape) { delete s.shape; if (target === a.tag) target = null }
     else { s.shape = { ...settings.shape }; target = a.tag }
-    update()
+    edited()
   })
   const edit = iconButton('edit', ICON_EDIT, 'Correct the range of ' + a.name)
   edit.addEventListener('click', () => { editingRange = editingRange === a.tag ? null : a.tag; update() })
@@ -209,7 +214,7 @@ function axisElement(a: AxisRange): HTMLElement {
     const input = numberInput(settings.axes[a.tag]?.[key] ?? a.defaultValue, a.max - a.min <= 2 ? 0.01 : 1, `${a.name} ${key === 'base' ? 'edge' : 'peak'} value`)
     const onValue = () => {
       const v = Number(readControl(input)), s = settings.axes[a.tag]
-      if (s && readControl(input) !== '' && Number.isFinite(v)) { s[key] = v; update() }
+      if (s && readControl(input) !== '' && Number.isFinite(v)) { s[key] = v; edited() }
     }
     input.addEventListener('input', onValue)
     input.addEventListener('change', onValue)
@@ -264,7 +269,7 @@ function renderDetection(): void {
     $('progress-bar').style.width = p ? Math.round((p.done / p.total) * 100) + '%' : '0%'
   }
   const source = selection?.axesSource
-  $('axes-badge').textContent = detecting ? '' : source === 'file' ? 'From font file' : source === 'detected' ? 'Measured' : source === 'fallback' ? 'Assumed' : ''
+  $('axes-badge').textContent = detecting || selection?.error ? '' : source === 'file' ? 'From font file' : source === 'detected' ? 'Measured' : source === 'fallback' ? 'Assumed' : ''
   const help = source === 'fallback' ? 'The ranges could not be measured. Spec defaults are shown; use the font file for exact values.' : ''
   $('axes-help').hidden = !help; $('axes-help').textContent = help
   $('file-notice').hidden = !selection?.fileError; $('file-notice').textContent = selection?.fileError || ''
@@ -339,11 +344,14 @@ function renderPreview(gs: Glyph[][], valid: boolean): void {
   $('preview-empty').hidden = show
   $('preview-empty').textContent = !selection || !selection.characters ? 'Select text to see the progression.' : selection.error ? 'Nothing to preview.' : 'Waiting for the axis ranges…'
   if (!show) { bars.replaceChildren(); renderValues([], false); return }
-  const n = group.length, visible = group.slice(0, PREVIEW_LIMIT)
+  const n = group.length
   const shape = editedShape()
   const s = strengths(n, shape)
   const peakIndex = n === 1 ? 0 : Math.round(shape.position * (n - 1))
-  const nodes: HTMLElement[] = visible.map((g, i) => {
+  const windowed = n > BAR_WINDOW
+  barOffset = Math.max(0, Math.min(barOffset, n - BAR_WINDOW))
+  const first = windowed ? barOffset : 0, last = windowed ? first + BAR_WINDOW : n
+  const bar = (g: Glyph, i: number): HTMLElement => {
     const b = document.createElement('button')
     b.type = 'button'; b.className = 'bar' + (i === peakIndex ? ' peak' : '')
     const letter = selection!.characters.slice(g.start, g.end)
@@ -353,12 +361,40 @@ function renderPreview(gs: Glyph[][], valid: boolean): void {
     const label = document.createElement('span'); label.textContent = letter
     b.append(fill, label)
     b.disabled = busy
-    b.addEventListener('click', () => { editedShape().position = n === 1 ? 1 : i / (n - 1); update() })
+    b.addEventListener('click', () => { editedShape().position = n === 1 ? 1 : i / (n - 1); edited() })
     return b
-  })
-  if (n > PREVIEW_LIMIT) { const more = document.createElement('span'); more.className = 'bars-more'; more.textContent = `+${n - PREVIEW_LIMIT}`; nodes.push(more) }
+  }
+  const nodes: HTMLElement[] = group.slice(first, last).map((g, k) => bar(g, first + k))
+  if (windowed) {
+    const arrow = (dir: -1 | 1, hidden: number): HTMLElement => {
+      const b = document.createElement('button')
+      b.type = 'button'; b.className = 'bar-nav'
+      b.innerHTML = dir < 0 ? ICON_LEFT : ICON_RIGHT
+      const count = document.createElement('span'); count.textContent = hidden ? '+' + hidden : ''
+      b.append(count) // same order on both sides: arrow above, count below
+      b.disabled = hidden === 0
+      const label = `${hidden} more ${hidden === 1 ? 'letter' : 'letters'} ${dir < 0 ? 'before' : 'after'}. Show the ${dir < 0 ? 'previous' : 'next'} letter.`
+      b.title = label; b.setAttribute('aria-label', label)
+      b.addEventListener('click', () => { shiftBars(dir) })
+      return b
+    }
+    nodes.unshift(arrow(-1, first))
+    nodes.push(arrow(1, n - last))
+  }
   bars.replaceChildren(...nodes)
   renderValues(group, valid)
+}
+function shiftBars(by: number): void {
+  barOffset += by
+  renderPreview(groups(), !validation() && enabledTags().length > 0)
+}
+/** Move the window so the peak letter is visible (used when the peak moves via the slider). */
+function revealPeak(): void {
+  const n = groups()[0]?.length || 0
+  if (n <= BAR_WINDOW) return
+  const peak = Math.round(editedShape().position * (n - 1))
+  if (peak < barOffset) barOffset = peak
+  else if (peak >= barOffset + BAR_WINDOW) barOffset = peak - BAR_WINDOW + 1
 }
 function renderValues(group: Glyph[], valid: boolean): void {
   const box = $('values-table'), toggle = $('toggle-values')
@@ -383,6 +419,21 @@ function renderValues(group: Glyph[], valid: boolean): void {
   })
   box.replaceChildren(table)
 }
+/** A change made by the user: re-render and write it to the selected text. */
+function edited(): void {
+  update()
+  scheduleLive()
+}
+// Coalesce rapid changes (slider drags) to one write per frame; the plugin keeps only the latest.
+function scheduleLive(): void {
+  if (liveTimer) return
+  liveTimer = setTimeout(() => {
+    liveTimer = undefined
+    const gs = groups(), count = gs.reduce((n, g) => n + g.length, 0)
+    if (!selection || selection.error || selection.detecting || busy || validation() || !enabledTags().length || !count || !segmenter) return
+    send({ type: 'live', id: selection.id, characters: selection.characters, settings: payload(), groups: gs })
+  }, 16)
+}
 function message(text: string, error = false): void { $('status').textContent = text; $('status').classList.toggle('error', error) }
 
 function update(): void {
@@ -395,11 +446,10 @@ function update(): void {
   renderShape()
   renderPreview(gs, valid)
   $('validation').hidden = !problem; $('validation').textContent = problem
-  $('apply').toggleAttribute('disabled', busy || uploading || !selection || !!selection.error || !!selection.detecting || !valid || count === 0 || count > 10000 || !segmenter)
+  $('done').toggleAttribute('disabled', busy)
   $('restore').toggleAttribute('disabled', busy || !selection?.canRestore)
   for (const id of ['fontFile', 'direction']) $(id).toggleAttribute('disabled', busy)
-  $('apply').textContent = busy && activeAction === 'apply' ? 'Applying…' : 'Apply'
-  $('restore').textContent = busy && activeAction === 'restore' ? 'Restoring…' : 'Restore'
+  $('restore').textContent = busy ? 'Restoring…' : 'Restore'
   if (selection) {
     $('selection').textContent = selection.error || (selection.family ? selection.family + ' · ' + count.toLocaleString('en') + (count === 1 ? ' letter' : ' letters') : 'Select one text layer')
     $('selection').classList.toggle('error', !!selection.error)
@@ -408,24 +458,34 @@ function update(): void {
 }
 
 // ---------- events ----------
-$('position').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { editedShape().position = Math.max(0, Math.min(1, v / 100)); update() } })
-$('falloff').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { editedShape().falloff = Math.max(0.01, Math.min(1, v / 100)); update() } })
+$('position').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { editedShape().position = Math.max(0, Math.min(1, v / 100)); revealPeak(); edited() } })
+$('falloff').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { editedShape().falloff = Math.max(0.01, Math.min(1, v / 100)); edited() } })
 const onCurve = (e: Event) => {
   const detail = (e as CustomEvent).detail
   const b = parseBezier(detail?.value ?? readControl(e.currentTarget as Control))
-  if (b) { editedShape().bezier = b; update() }
+  if (b) { editedShape().bezier = b; edited() }
 }
 $('curve').addEventListener('input', onCurve)
 $('curve').addEventListener('change', onCurve)
 $('toggle-values').addEventListener('click', () => { showValues = !showValues; update() })
-$('mode').addEventListener('change', e => { settings.mode = readControl(e.currentTarget as Control) === 'word' ? 'word' : 'text'; update() })
+// Wheel or trackpad moves the letter window one letter per notch.
+let wheelRest = 0
+$('bars').addEventListener('wheel', e => {
+  const n = groups()[0]?.length || 0
+  if (n <= BAR_WINDOW) return
+  e.preventDefault()
+  wheelRest += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+  const steps = Math.trunc(wheelRest / 30)
+  if (steps) { wheelRest -= steps * 30; shiftBars(steps) }
+}, { passive: false })
+$('mode').addEventListener('change', e => { settings.mode = readControl(e.currentTarget as Control) === 'word' ? 'word' : 'text'; edited() })
 // Toggle: Start → End ↔ End → Start; from any other shape it starts a Start → End ramp.
 $('direction').addEventListener('click', () => {
   const sh = editedShape()
   const position = isRamp(sh) === 'forward' ? 0 : 1
   delete sh.bezier
   Object.assign(sh, DEFAULT_SHAPE, { position })
-  update()
+  edited()
 })
 $('show-file').addEventListener('click', () => { $('file-panel').hidden = false; update() })
 $('fontFile').addEventListener('change', async event => {
@@ -441,14 +501,11 @@ $('fontFile').addEventListener('change', async event => {
     send({ type: 'file', bytes: Array.from(new Uint8Array(buffer)) })
   } catch { if (version === uploadVersion) { uploading = false; send({ type: 'file' }); message('Could not read this font file. Try another file.', true); update() } }
 })
-$('apply').addEventListener('click', () => {
-  if ($('apply').hasAttribute('disabled') || !selection) return
-  activeAction = 'apply'; busy = true; message('Applying…')
-  send({ type: 'apply', id: selection.id, characters: selection.characters, settings: payload(), groups: groups() }); update()
-})
+$('done').addEventListener('click', () => { if (!$('done').hasAttribute('disabled')) send({ type: 'done' }) })
 $('restore').addEventListener('click', () => {
   if ($('restore').hasAttribute('disabled')) return
-  activeAction = 'restore'; busy = true; message('Restoring the original font settings…'); send({ type: 'restore' }); update()
+  if (liveTimer) clearTimeout(liveTimer)
+  busy = true; message('Restoring the original font settings…'); send({ type: 'restore' }); update()
 })
 window.addEventListener('message', event => {
   const msg = event.data?.pluginMessage
@@ -460,6 +517,7 @@ window.addEventListener('message', event => {
     // axes but keep the progression the user has dialled in.
     const newFont = !newLayer && !!msg.family && !!lastFamily && lastFamily !== msg.family
     selection = msg as Selection; lastId = msg.id; lastFamily = msg.family || lastFamily
+    if (newLayer || newFont) barOffset = 0
     if (newLayer) {
       target = null; editingRange = null
       settings = msg.settings ? JSON.parse(JSON.stringify(msg.settings)) : { version: 2, axes: {}, shape: { ...DEFAULT_SHAPE }, mode: settings.mode }
@@ -473,6 +531,8 @@ window.addEventListener('message', event => {
     update()
   } else if (msg.type === 'detect-progress') {
     if (selection && selection.family === msg.family) { selection.detecting = true; selection.progress = { done: msg.done, total: msg.total, tag: msg.tag }; renderDetection() }
+  } else if (msg.type === 'live-applied') {
+    if (selection && selection.id === msg.id && !selection.canRestore) { selection.canRestore = true; update() }
   } else if (msg.type === 'status') message(msg.text, msg.error)
   else if (msg.type === 'busy') { busy = msg.busy; update() }
 })

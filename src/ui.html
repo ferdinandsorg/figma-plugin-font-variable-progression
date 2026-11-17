@@ -34,6 +34,8 @@
     .selection-bar { display:flex; align-items:center; gap:8px; min-height:40px; padding:8px 16px; border-bottom:1px solid var(--figma-color-border); }
     .selection-bar svg { flex:none; color:var(--figma-color-icon-secondary); }
     #selection { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #selection.error { white-space:normal; overflow:visible; }
+    .selection-bar:has(#selection.error) { align-items:flex-start; }
     .section-label { font-weight:500; }
     #selection.error,#validation { color:var(--figma-color-text-danger); }
     .settings-section { padding:16px; display:grid; gap:12px; border-bottom:1px solid var(--figma-color-border); }
@@ -73,14 +75,18 @@
     .axis-values > div { min-width:0; }
     .axis-values fig-input-number { width:100%; min-width:0; }
     .axis-values label { display:block; color:var(--figma-color-text-secondary); font-size:11px; line-height:16px; margin-bottom:2px; }
-    .bars { display:flex; align-items:flex-end; gap:2px; height:56px; padding:6px 8px 0; }
+    .bars { display:flex; align-items:flex-end; gap:2px; height:56px; padding:6px 0 0; }
     .bar { flex:1 1 0; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%; justify-content:flex-end; cursor:pointer; border:0; background:none; padding:0; color:inherit; font:inherit; }
     .bar i { display:block; width:100%; max-width:18px; min-height:2px; border-radius:2px 2px 0 0; background:var(--figma-color-bg-brand); opacity:.85; }
     .bar.peak i { opacity:1; box-shadow:0 0 0 1px var(--figma-color-border-brand-strong); }
     .bar span { font-size:11px; line-height:14px; color:var(--figma-color-text-secondary); }
     .bar:hover span, .bar.peak span { color:var(--figma-color-text); }
     .bar:focus-visible { outline:2px solid var(--ring); outline-offset:1px; border-radius:2px; }
-    .bars-more { font-size:11px; color:var(--figma-color-text-tertiary); align-self:center; padding-left:4px; }
+    .bar-nav { all:unset; box-sizing:border-box; flex:none; width:18px; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; border-radius:var(--radius-medium,5px); color:var(--figma-color-icon-secondary); font-size:10px; line-height:12px; cursor:pointer; font-variant-numeric:tabular-nums; }
+    .bar-nav span { color:var(--figma-color-text-secondary); }
+    .bar-nav:hover { background:var(--figma-color-bg-hover) !important; color:var(--figma-color-icon); }
+    .bar-nav[disabled] { opacity:.3; cursor:default; background:none !important; }
+    .bar-nav:focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
     .axis-actions { display:flex; align-items:center; gap:2px; }
     .icon-button { all:unset; box-sizing:border-box; width:24px; height:24px; display:grid; place-items:center; border-radius:var(--radius-medium,5px); color:var(--figma-color-icon-secondary); cursor:pointer; }
     .icon-button:hover { background:var(--figma-color-bg-hover) !important; color:var(--figma-color-icon); }
@@ -113,14 +119,15 @@
     .curve-block { display:grid; gap:6px; }
     .curve-label { display:flex; justify-content:space-between; align-items:baseline; }
     .curve-label .helper { font-size:11px; }
+    .live-hint { font-weight:400; color:var(--figma-color-text-tertiary); }
     .preview-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .preview-box { padding:8px; background:var(--figma-color-bg-secondary); border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); }
+    .preview-box { padding:8px 6px; background:var(--figma-color-bg-secondary); border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); }
     #preview { font-size:13px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; line-height:22px; }
     #status { margin:0 16px 16px; padding:12px; border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); color:var(--figma-color-text-secondary); overflow-wrap:anywhere; }
     #status:empty { display:none; }
     #status.error { color:var(--figma-color-text-danger); border-color:var(--figma-color-border-danger); }
     fig-footer { background:var(--figma-color-bg); display:flex; flex-wrap:nowrap; align-items:center; gap:8px; }
-    fig-footer #apply { flex:1 1 auto; }
+    fig-footer #done { flex:1 1 auto; }
     fig-footer #restore { flex:none; }
     fig-field,fig-field > label,fig-input-number,fig-dropdown,fig-input-file,fig-button { font-size:12px; line-height:20px; }
     fig-input-number:not([data-generated=slider-number]),fig-dropdown,fig-button { min-height:32px; }
@@ -167,12 +174,12 @@
   </fig-content>
   <div class="dock">
     <section class="preview-section" aria-label="Preview">
-      <div class="preview-heading"><p class="section-label">Preview</p><button id="toggle-values" class="link-button" type="button" aria-expanded="false" aria-controls="values-table">Show values</button></div>
+      <div class="preview-heading"><p class="section-label">Preview <span class="live-hint">· applies live</span></p><button id="toggle-values" class="link-button" type="button" aria-expanded="false" aria-controls="values-table">Show values</button></div>
       <div class="preview-box"><div id="bars" class="bars" role="group" aria-label="Strength per letter. Choose a letter to move the peak there."></div><p id="preview-empty" class="helper">Select text to see the progression.</p></div>
       <div id="values-table" class="values-table" hidden></div>
     </section>
     <div id="status" role="status" aria-live="polite"></div>
-    <fig-footer><fig-button id="restore" variant="secondary" title="Restore the original font settings" disabled>Restore</fig-button><fig-button id="apply" type="submit" disabled>Apply</fig-button></fig-footer>
+    <fig-footer><fig-button id="restore" variant="secondary" title="Restore the original font settings" disabled>Restore</fig-button><fig-button id="done" type="submit" title="Finish editing. All changes become one undo step.">Done</fig-button></fig-footer>
   </div>
 </div>
 <!-- UI_SCRIPT -->

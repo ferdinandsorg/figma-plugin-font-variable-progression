@@ -125,7 +125,14 @@ Empfehlung: **A + D**, C als Option.
 - Globale Steuerung: Peak position (Slider + Klick auf Buchstaben), Falloff, Curve, Entire text / Each word.
 - Footer: Restore · Apply.
 
-**Phase 4 – Live-Vorschau** (A + D, optional C).
+**Phase 4 – Live-Vorschau → Live-Bearbeitung ✅ umgesetzt und in Figma getestet**
+- Erst als SVG-Vorschau einer temporären Kopie gebaut, dann nach Messung verworfen: direkt auf den Text ist bei kurzen Texten ~2,5× schneller (8 vs. 20 ms) und zeigt das Ergebnis im echten Kontext.
+- Messung: jeder `setRangeFontName`-Aufruf kostet Zeit proportional zur Textlänge → quadratisch. Unabhängig von Zeilenumbruch/Auto-Resize/Reihenfolge; nur weniger Aufrufe helfen.
+- Live pro Regler-Schritt (mit Zusammenfassen gleicher Nachbarwerte): 4 Zeichen 4–7 ms · 30 Zeichen 24–55 ms · 50 Zeichen 45–104 ms · 100 Zeichen 133–670 ms.
+- Daher **Limit 100 Zeichen** mit klarer Meldung. Änderungen erst bei Nutzer-Eingaben (Öffnen/Auswählen ändert nichts), max. ein Schreibvorgang pro Frame, Plugin verarbeitet nur den neuesten.
+- Rückgängig: kein `commitUndo` pro Schritt; Abschluss bei „Done“ (schließt das Plugin), Ebenenwechsel oder Schließen. In Figma getestet: ⌘Z springt pro losgelassenem Regler einen Schritt zurück (nicht pro Zwischenschritt beim Ziehen). „Restore“ geht jederzeit zum Original zurück.
+- Balken-Vorschau zum Peak-Setzen bleibt einzeilig: Ausschnitt von 16 Buchstaben, Pfeile links/rechts mit „+N“ verschieben ihn um je einen Buchstaben (auch per Scrollrad/Trackpad). Bewegt der Slider den Peak aus dem Ausschnitt, wandert dieser mit. (Variante „umbrechen wie Text“ getestet und verworfen.)
+- Ursprünglicher Plan: (A + D, optional C).
 
 **Phase 5 – Feinschliff**: Persistenz v2 + Migration, Fehlerfälle (statische Schrift, Mixed Fonts, fehlende Schrift), Performance bei langen Texten (Preview nur erste Zeile / max. N Zeichen).
 
