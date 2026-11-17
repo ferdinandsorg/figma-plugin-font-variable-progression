@@ -1,4 +1,4 @@
-# Plan: Variable Axis Progression (Nachfolger von „Font weight gradient“)
+# Plan: Font Axis Gradient (vormals „Font weight gradient“)
 
 Stand: 2026-11-17
 
@@ -106,7 +106,21 @@ Empfehlung: **A + D**, C als Option.
 - Reine Funktion `computeValues(glyphCount, axisConfig) → number[]`, in eigener Datei mit Unit-Tests (vitest), läuft in Plugin und UI identisch.
 - Anwenden: pro Graphem alle aktiven Achsen in `variationSettings` mergen, übrige Achsen erhalten.
 
-**Phase 3 – UI**
+**Phase 3 – UI (in Arbeit)**
+- ✅ Header/Untertitel entfernt, Auswahl als kompakte Zeile („T Google Sans Flex · 4 letters“).
+- ✅ Footer einzeilig (Restore + Apply), Apply nutzt Figmas Brand-Tokens (weiß auf Blau, im Dark Mode #0C8CE9) statt eigener Farben.
+- ✅ Link „Ranges look wrong?“ ohne blauen Hover-Hintergrund (FigUI3-`button:hover` überschrieben).
+- ✅ Achsen verknüpft/gelöst: jede Achse folgt standardmäßig der gemeinsamen Progression; Ketten-Symbol gibt ihr eine eigene (`AxisSetting.shape`). Chips „Shared / <Achse>“ wählen, welche Progression Regler und Vorschau zeigen.
+- ✅ Richtungs-Toggle „Start → End“ ↔ „End → Start“ (für die gerade bearbeitete Progression).
+- ✅ Bereich pro Achse manuell korrigieren (Stift-Symbol), gespeichert pro Schrift in `clientStorage` (`rangeOverrides:v1:<family>`), Reset möglich.
+- ✅ fig-field-Labels bündig (FigUI3 bringt eigene 16-px-Ränder mit).
+- ✅ Runde 2: Slider-Zahlenfeld-Abstand 12 px; Vorschau + Status + Buttons als fixiertes Dock unten (Fensterhöhe max. 760 px, darüber scrollen die Einstellungen); Werte pro Buchstabe hinter „Show values“ als Tabelle (alle aktiven Achsen, Peak markiert).
+- ✅ Schriftwechsel an der ausgewählten Ebene wird erkannt (`page.on('nodechange')` auf fontName/characters/styledTextSegments/textStyleId, auch nach Seitenwechsel). Das UI lädt dann die Achsen der neuen Schrift neu und behält die Progression.
+- ✅ Kurve als `fig-easing-curve` (Bezier, Presets + Ziehen); Engine wertet `Shape.bezier` aus (alte Presets werden auf Bezier abgebildet).
+- ✅ Slider-Wertfeld wieder als native FigUI3-Einheit (Spur | Wert, 24 px); die 32-px-Regel gilt nicht mehr für das Slider-Feld.
+- ✅ Chips heißen nach den Achsen, die sie steuern: eine verknüpfte Achse → ihr Name; mehrere → Ketten-Symbol + „Width + Grade“ bzw. „Width, Grade +2“ (Tooltip listet alle). Kein abstraktes „Shared“ mehr.
+- ✅ Umbenannt in **Font Axis Gradient** (Plugin-ID und Speicher-Keys unverändert).
+- Ursprünglicher Plan:
 - Pro Achse ein aufklappbarer Block: Schalter, Bereich, `fig-slider` für Base/Peak.
 - Globale Steuerung: Peak position (Slider + Klick auf Buchstaben), Falloff, Curve, Entire text / Each word.
 - Footer: Restore · Apply.

@@ -1,5 +1,5 @@
 {
-  "name": "Font weight gradient",
+  "name": "Font Axis Gradient",
   "id": "f5640f22-a592-4f4f-8903-2397d80a7bee",
   "api": "1.0.0",
   "main": "dist/code.js",
@@ -10,7 +10,7 @@
   "relaunchButtons": [
     {
       "command": "f5640f22-a592-4f4f-8903-2397d80a7bee",
-      "name": "Font weight gradient"
+      "name": "Font Axis Gradient"
     }
   ]
 }

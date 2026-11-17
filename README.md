@@ -1,6 +1,6 @@
-# Font weight gradient (→ Variable Axis Progression)
+# Font Axis Gradient
 
-Figma plugin that varies variable-font axes letter by letter. Roadmap: [PLAN.md](PLAN.md).
+Figma plugin that varies variable-font axes letter by letter (formerly “Font weight gradient”). Roadmap: [PLAN.md](PLAN.md).
 
 ## Setup
 
@@ -16,7 +16,7 @@ npm test           # engine unit tests
 
 1. `npm run build` (oder `npm run watch` laufen lassen).
 2. Figma Desktop → Menü **Plugins → Development → Import plugin from manifest…** → `manifest.json` in diesem Ordner wählen.
-3. Eine Textebene auswählen → **Plugins → Development → Font weight gradient**.
+3. Eine Textebene auswählen → **Plugins → Development → Font Axis Gradient**.
 4. Nach Code-Änderungen: Plugin schließen und erneut starten (oder ⌥⌘P „Run last plugin“).
 5. Konsole: **Plugins → Development → Show/Hide console**.
 

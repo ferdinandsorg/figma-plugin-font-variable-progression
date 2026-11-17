@@ -1,4 +1,4 @@
-export type AxisSource = 'detected' | 'file' | 'registered' | 'unavailable'
+export type AxisSource = 'detected' | 'file' | 'registered' | 'manual' | 'unavailable'
 
 export type AxisRange = {
   tag: string

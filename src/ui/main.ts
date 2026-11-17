@@ -1,5 +1,5 @@
 import type { AxisRange } from '../axes'
-import { AxisSetting, Curve, DEFAULT_SHAPE, Settings, computeValues, strengths } from '../engine'
+import { AxisSetting, Bezier, CURVE_BEZIER, DEFAULT_SHAPE, Settings, Shape, computeValues, isRamp, strengths } from '../engine'
 
 type Glyph = { start: number; end: number }
 type Selection = {
@@ -23,12 +23,19 @@ const $ = <T extends HTMLElement = Control>(id: string) => document.getElementBy
 const send = (msg: object) => parent.postMessage({ pluginMessage: msg }, '*')
 const fmt = (v: number) => Number(v.toFixed(2)).toLocaleString('en')
 const PREVIEW_LIMIT = 24
+const ICON_LINK = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M6.5 9.5l3-3M7 4.8l1-1a2.5 2.5 0 013.5 3.5l-1 1M9 11.2l-1 1a2.5 2.5 0 01-3.5-3.5l1-1"/></svg>'
+const ICON_UNLINK = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M7 4.8l1-1a2.5 2.5 0 013.5 3.5l-1 1M9 11.2l-1 1a2.5 2.5 0 01-3.5-3.5l1-1M3 3l1.5 1.5M13 13l-1.5-1.5"/></svg>'
+const ICON_EDIT = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M10.5 3.5l2 2L6 12H4v-2z"/></svg>'
 
 let selection: Selection | null = null
 let settings: Settings = { version: 2, axes: {}, shape: { ...DEFAULT_SHAPE }, mode: 'text' }
 let busy = false, uploading = false, uploadVersion = 0, connected = false
-let lastId: string | undefined
+let lastId: string | undefined, lastFamily: string | undefined
+let showValues = false
 let activeAction: 'apply' | 'restore' = 'apply'
+/** Which progression the controls edit: null = shared, otherwise a detached axis tag. */
+let target: string | null = null
+let editingRange: string | null = null
 let segmenter: Intl.Segmenter | null = null
 try { segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' }) } catch { /* older engines */ }
 
@@ -93,6 +100,18 @@ function groups(): Glyph[][] {
   if (word.length) result.push(word)
   return settings.mode === 'word' ? result : (all.length ? [all] : [])
 }
+function detachedTags(): string[] { return enabledTags().filter(t => !!settings.axes[t]?.shape) }
+function validTarget(): string | null {
+  if (target && settings.axes[target]?.enabled && settings.axes[target]?.shape) return target
+  const linked = enabledTags().some(t => !settings.axes[t].shape)
+  return linked ? null : detachedTags()[0] ?? null
+}
+/** The shape object the controls currently edit (mutable). */
+function editedShape(): Shape {
+  const t = validTarget()
+  return (t && settings.axes[t]?.shape) || settings.shape
+}
+function axisName(tag: string): string { return selection?.axes?.find(a => a.tag === tag)?.name || tag }
 function validation(): string {
   const tags = enabledTags()
   if (!adjustable().length) return ''
@@ -117,14 +136,34 @@ function renderAxes(): void {
     const row = box.querySelector<HTMLElement>(`[data-tag="${a.tag}"]`)
     const s = settings.axes[a.tag]
     if (!row || !s) continue
+    const own = !!s.shape
     row.classList.toggle('on', s.enabled)
     setChecked(row.querySelector<Control>('fig-switch')!, s.enabled)
-    row.querySelector<HTMLElement>('.axis-values')!.hidden = !s.enabled
-    const [base, peak] = row.querySelectorAll<Control>('fig-input-number')
-    if (document.activeElement !== base && !base.contains(document.activeElement)) setControl(base, s.base)
-    if (document.activeElement !== peak && !peak.contains(document.activeElement)) setControl(peak, s.peak)
+    row.querySelector<HTMLElement>(':scope > .axis-values')!.hidden = !s.enabled
+    const link = row.querySelector<HTMLButtonElement>('[data-action="link"]')!
+    link.hidden = !s.enabled
+    link.innerHTML = own ? ICON_UNLINK : ICON_LINK
+    link.setAttribute('aria-pressed', String(own))
+    link.title = own ? 'Own progression · click to follow the shared one' : 'Follows the shared progression · click to give this axis its own'
+    link.setAttribute('aria-label', (own ? 'Link ' : 'Detach ') + a.name)
+    row.querySelector<HTMLElement>('.own')!.hidden = !(own && s.enabled)
+    const edit = row.querySelector<HTMLButtonElement>('[data-action="edit"]')!
+    edit.setAttribute('aria-pressed', String(editingRange === a.tag))
+    row.querySelector<HTMLElement>('.range-editor')!.hidden = editingRange !== a.tag
+    const [base, peak] = row.querySelectorAll<Control>(':scope > .axis-values fig-input-number')
+    for (const [el, v] of [[base, s.base], [peak, s.peak]] as const) {
+      el.setAttribute('min', String(a.min)); el.setAttribute('max', String(a.max))
+      if (!el.contains(document.activeElement)) setControl(el, v)
+    }
     for (const el of [row.querySelector<Control>('fig-switch')!, base, peak]) el.toggleAttribute('disabled', busy)
+    link.disabled = busy; edit.disabled = busy
   }
+}
+function iconButton(action: string, html: string, label: string): HTMLButtonElement {
+  const b = document.createElement('button')
+  b.type = 'button'; b.className = 'icon-button'; b.dataset.action = action
+  b.innerHTML = html; b.title = label; b.setAttribute('aria-label', label)
+  return b
 }
 function axisElement(a: AxisRange): HTMLElement {
   const unavailable = a.source === 'unavailable'
@@ -135,31 +174,39 @@ function axisElement(a: AxisRange): HTMLElement {
   const title = document.createElement('div'); title.className = 'title'
   const name = document.createElement('span'); name.textContent = a.name
   const tag = document.createElement('code'); tag.textContent = a.tag
-  title.append(name, tag)
+  const own = document.createElement('em'); own.className = 'own'; own.textContent = 'own'; own.hidden = true
+  title.append(name, tag, own)
   const range = document.createElement('span'); range.className = 'range'
   if (unavailable) {
     range.textContent = a.tag === 'opsz' ? 'Auto · font size' : 'Not adjustable'
     range.title = a.tag === 'opsz' ? 'Figma sets the optical size automatically from the font size.' : 'Changing this axis has no visible effect in Figma.'
     const spacer = document.createElement('span'); spacer.className = 'axis-switch-spacer'
-    head.append(spacer, title, range)
+    head.append(spacer, title, range, document.createElement('span'))
     row.append(head)
     return row
   }
   range.textContent = fmt(a.min) + '–' + fmt(a.max)
-  range.title = (a.source === 'registered' ? 'Assumed from the OpenType spec · ' : '') + 'Default ' + fmt(a.defaultValue)
+  range.title = (a.source === 'registered' ? 'Assumed from the OpenType spec · ' : a.source === 'manual' ? 'Set manually · ' : '') + 'Default ' + fmt(a.defaultValue)
   const toggle = document.createElement('fig-switch') as Control
   toggle.setAttribute('aria-label', 'Use ' + a.name)
-  const onToggle = (e: Event) => { const s = settings.axes[a.tag]; if (s) { s.enabled = eventChecked(e); update() } }
-  toggle.addEventListener('change', onToggle)
-  head.append(toggle, title, range)
+  toggle.addEventListener('change', e => { const s = settings.axes[a.tag]; if (s) { s.enabled = eventChecked(e); update() } })
+  const actions = document.createElement('div'); actions.className = 'axis-actions'
+  const link = iconButton('link', ICON_LINK, 'Detach progression')
+  link.addEventListener('click', () => {
+    const s = settings.axes[a.tag]; if (!s) return
+    if (s.shape) { delete s.shape; if (target === a.tag) target = null }
+    else { s.shape = { ...settings.shape }; target = a.tag }
+    update()
+  })
+  const edit = iconButton('edit', ICON_EDIT, 'Correct the range of ' + a.name)
+  edit.addEventListener('click', () => { editingRange = editingRange === a.tag ? null : a.tag; update() })
+  actions.append(link, edit)
+  head.append(toggle, title, range, actions)
   const values = document.createElement('div'); values.className = 'axis-values'; values.hidden = true
   for (const key of ['base', 'peak'] as const) {
     const wrap = document.createElement('div')
     const label = document.createElement('label'); label.textContent = key === 'base' ? 'Edge' : 'Peak'
-    const input = document.createElement('fig-input-number') as Control
-    for (const [k, v] of Object.entries({ min: a.min, max: a.max, step: a.max - a.min <= 2 ? 0.01 : 1, precision: 2, value: settings.axes[a.tag]?.[key] ?? a.defaultValue })) input.setAttribute(k, String(v))
-    input.setAttribute('full', '')
-    input.setAttribute('aria-label', `${a.name} ${key === 'base' ? 'edge' : 'peak'} value`)
+    const input = numberInput(settings.axes[a.tag]?.[key] ?? a.defaultValue, a.max - a.min <= 2 ? 0.01 : 1, `${a.name} ${key === 'base' ? 'edge' : 'peak'} value`)
     const onValue = () => {
       const v = Number(readControl(input)), s = settings.axes[a.tag]
       if (s && readControl(input) !== '' && Number.isFinite(v)) { s[key] = v; update() }
@@ -168,8 +215,45 @@ function axisElement(a: AxisRange): HTMLElement {
     input.addEventListener('change', onValue)
     wrap.append(label, input); values.append(wrap)
   }
-  row.append(head, values)
+  row.append(head, rangeEditor(a), values)
   return row
+}
+function numberInput(value: number, step: number, label: string): Control {
+  const input = document.createElement('fig-input-number') as Control
+  for (const [k, v] of Object.entries({ step, precision: 2, value })) input.setAttribute(k, String(v))
+  input.setAttribute('full', '')
+  input.setAttribute('aria-label', label)
+  return input
+}
+function rangeEditor(a: AxisRange): HTMLElement {
+  const box = document.createElement('div'); box.className = 'range-editor'; box.hidden = true
+  const values = document.createElement('div'); values.className = 'axis-values'
+  const step = a.max - a.min <= 2 ? 0.01 : 1
+  const inputs = (['min', 'max'] as const).map(key => {
+    const wrap = document.createElement('div')
+    const label = document.createElement('label'); label.textContent = key === 'min' ? 'Minimum' : 'Maximum'
+    const input = numberInput(a[key], step, `${a.name} ${key}imum`)
+    wrap.append(label, input); values.append(wrap)
+    return input
+  })
+  const row = document.createElement('div'); row.className = 'row'
+  if (a.source === 'manual') {
+    const reset = document.createElement('fig-button'); reset.setAttribute('variant', 'ghost'); reset.textContent = 'Reset'
+    reset.addEventListener('click', () => { editingRange = null; send({ type: 'range-override', family: selection?.family, tag: a.tag, reset: true }) })
+    row.append(reset)
+  }
+  const save = document.createElement('fig-button'); save.setAttribute('variant', 'secondary'); save.textContent = 'Save range'
+  save.addEventListener('click', () => {
+    const [min, max] = inputs.map(i => Number(readControl(i)))
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) { message('The minimum must be smaller than the maximum.', true); return }
+    editingRange = null
+    send({ type: 'range-override', family: selection?.family, tag: a.tag, min, max })
+  })
+  row.append(save)
+  const hint = document.createElement('p'); hint.className = 'helper'
+  hint.textContent = 'Overrides the measured range for ' + a.name + ' in this font.'
+  box.append(values, hint, row)
+  return box
 }
 function renderDetection(): void {
   const detecting = !!selection?.detecting && !selection.error
@@ -189,17 +273,64 @@ function renderDetection(): void {
   $('show-file').hidden = fileOpen
   $('show-file').setAttribute('aria-expanded', String(fileOpen))
 }
+function curveOf(sh: Shape): Bezier { return sh.bezier || CURVE_BEZIER[sh.curve] }
+function parseBezier(value: unknown): Bezier | null {
+  const parts = typeof value === 'string' ? value.split(',').map(Number) : null
+  return parts && parts.length === 4 && parts.every(Number.isFinite) ? parts as Bezier : null
+}
+function sameBezier(a: Bezier | null, b: Bezier): boolean { return !!a && a.every((v, i) => Math.abs(v - b[i]) < 0.005) }
+function linkedTags(): string[] { return enabledTags().filter(t => !settings.axes[t].shape) }
+/** Name of the shared progression, spelled out by the axes that follow it. */
+function sharedLabel(): string {
+  const names = linkedTags().map(axisName)
+  if (names.length <= 2) return names.join(' + ')
+  return `${names[0]}, ${names[1]} +${names.length - 2}`
+}
+function renderTargets(): void {
+  const t = validTarget(), detached = detachedTags(), linked = linkedTags()
+  const box = $('targets')
+  box.hidden = detached.length === 0
+  // A shared group with one member is just that axis; with several it gets a link icon.
+  const options: { tag: string | null; label: string; group: boolean; title: string }[] = [
+    ...(linked.length ? [{ tag: null, label: sharedLabel(), group: linked.length > 1, title: linked.length > 1 ? `Linked axes share one progression: ${linked.map(axisName).join(', ')}` : `Edit the progression of ${axisName(linked[0])}` }] : []),
+    ...detached.map(tag => ({ tag, label: axisName(tag), group: false, title: `Edit the progression of ${axisName(tag)}` })),
+  ]
+  const key = JSON.stringify(options) + '|' + t + '|' + busy
+  if (box.dataset.key === key) return
+  box.dataset.key = key
+  box.replaceChildren(...options.map(o => {
+    const b = document.createElement('button')
+    b.type = 'button'; b.className = 'chip' + (o.group ? ' group' : ''); b.disabled = busy
+    if (o.group) b.insertAdjacentHTML('beforeend', ICON_LINK)
+    const text = document.createElement('span'); text.textContent = o.label
+    b.append(text)
+    b.setAttribute('aria-pressed', String(o.tag === t))
+    b.title = o.title
+    b.addEventListener('click', () => { target = o.tag; update() })
+    return b
+  }))
+}
 function renderShape(): void {
-  const sh = settings.shape
-  for (const [id, value] of [['position', Math.round(sh.position * 100)], ['falloff', Math.round(sh.falloff * 100)], ['curve', sh.curve], ['mode', settings.mode]] as const) {
+  const sh = editedShape()
+  for (const [id, value] of [['position', Math.round(sh.position * 100)], ['falloff', Math.round(sh.falloff * 100)], ['mode', settings.mode]] as const) {
     const el = $(id)
     if (!el.contains(document.activeElement) && readControl(el) !== String(value)) setControl(el, value)
     el.toggleAttribute('disabled', busy)
   }
-  const ramp = sh.position === 1 && sh.falloff === 1 && sh.curve === 'linear'
-  $('shape-help').textContent = ramp
-    ? 'Edge value at the first letter, peak value at the last.'
-    : `Peak at ${Math.round(sh.position * 100)}%, fading over ${Math.round(sh.falloff * 100)}% of the ${settings.mode === 'word' ? 'word' : 'text'}.`
+  const curve = $('curve'), bezier = curveOf(sh)
+  if (!curve.contains(document.activeElement) && !sameBezier(parseBezier(readControl(curve)), bezier)) setControl(curve, bezier.join(', '))
+  curve.toggleAttribute('disabled', busy)
+  const ramp = isRamp(sh)
+  $('direction').textContent = ramp === 'reverse' ? 'End → Start' : 'Start → End'
+  $('direction').title = ramp === 'forward' ? 'Reverse: ramp from the last to the first letter' : ramp === 'reverse' ? 'Reverse: ramp from the first to the last letter' : 'Ramp from the first to the last letter'
+  $('direction').toggleAttribute('selected', !!ramp)
+  const t = validTarget()
+  const unit = settings.mode === 'word' ? 'word' : 'text'
+  const text = ramp === 'forward' ? 'edge value at the first letter, peak value at the last.'
+    : ramp === 'reverse' ? 'peak value at the first letter, edge value at the last.'
+    : `peak at ${Math.round(sh.position * 100)}%, fading over ${Math.round(sh.falloff * 100)}% of the ${unit}.`
+  const who = t ? axisName(t) : detachedTags().length ? sharedLabel() : ''
+  $('shape-help').textContent = who ? `${who}: ${text}` : text[0].toUpperCase() + text.slice(1)
 }
 function renderPreview(gs: Glyph[][], valid: boolean): void {
   const bars = $('bars'), group = gs[0] || []
@@ -207,10 +338,11 @@ function renderPreview(gs: Glyph[][], valid: boolean): void {
   bars.hidden = !show
   $('preview-empty').hidden = show
   $('preview-empty').textContent = !selection || !selection.characters ? 'Select text to see the progression.' : selection.error ? 'Nothing to preview.' : 'Waiting for the axis ranges…'
-  if (!show) { bars.replaceChildren(); $('preview-values').textContent = ''; return }
+  if (!show) { bars.replaceChildren(); renderValues([], false); return }
   const n = group.length, visible = group.slice(0, PREVIEW_LIMIT)
-  const s = strengths(n, settings.shape)
-  const peakIndex = n === 1 ? 0 : Math.round(settings.shape.position * (n - 1))
+  const shape = editedShape()
+  const s = strengths(n, shape)
+  const peakIndex = n === 1 ? 0 : Math.round(shape.position * (n - 1))
   const nodes: HTMLElement[] = visible.map((g, i) => {
     const b = document.createElement('button')
     b.type = 'button'; b.className = 'bar' + (i === peakIndex ? ' peak' : '')
@@ -221,17 +353,35 @@ function renderPreview(gs: Glyph[][], valid: boolean): void {
     const label = document.createElement('span'); label.textContent = letter
     b.append(fill, label)
     b.disabled = busy
-    b.addEventListener('click', () => { settings.shape.position = n === 1 ? 1 : i / (n - 1); update() })
+    b.addEventListener('click', () => { editedShape().position = n === 1 ? 1 : i / (n - 1); update() })
     return b
   })
   if (n > PREVIEW_LIMIT) { const more = document.createElement('span'); more.className = 'bars-more'; more.textContent = `+${n - PREVIEW_LIMIT}`; nodes.push(more) }
   bars.replaceChildren(...nodes)
+  renderValues(group, valid)
+}
+function renderValues(group: Glyph[], valid: boolean): void {
+  const box = $('values-table'), toggle = $('toggle-values')
   const tags = enabledTags()
-  if (valid && tags.length) {
-    const values = computeValues(n, payload())
-    const first = tags[0], name = adjustable().find(a => a.tag === first)?.name || first
-    $('preview-values').textContent = name + ': ' + visible.slice(0, 8).map((g, i) => selection!.characters.slice(g.start, g.end) + ' ' + fmt(values[i][first])).join(' · ') + (n > 8 ? ' · …' : '') + (tags.length > 1 ? ` (+${tags.length - 1} more ${tags.length === 2 ? 'axis' : 'axes'})` : '')
-  } else $('preview-values').textContent = ''
+  const available = valid && tags.length > 0 && group.length > 0
+  toggle.hidden = !available
+  toggle.textContent = showValues ? 'Hide values' : 'Show values'
+  toggle.setAttribute('aria-expanded', String(showValues && available))
+  box.hidden = !(showValues && available)
+  if (box.hidden) { box.replaceChildren(); return }
+  const values = computeValues(group.length, payload())
+  const peakIndex = group.length === 1 ? 0 : Math.round(editedShape().position * (group.length - 1))
+  const table = document.createElement('table')
+  const head = table.createTHead().insertRow()
+  for (const label of ['Letter', ...tags.map(axisName)]) { const th = document.createElement('th'); th.textContent = label; head.append(th) }
+  const body = table.createTBody()
+  group.forEach((g, i) => {
+    const row = body.insertRow()
+    if (i === peakIndex) row.className = 'peak'
+    row.insertCell().textContent = selection!.characters.slice(g.start, g.end)
+    for (const t of tags) row.insertCell().textContent = fmt(values[i][t])
+  })
+  box.replaceChildren(table)
 }
 function message(text: string, error = false): void { $('status').textContent = text; $('status').classList.toggle('error', error) }
 
@@ -241,28 +391,42 @@ function update(): void {
   const valid = !problem && enabledTags().length > 0
   renderAxes()
   renderDetection()
+  renderTargets()
   renderShape()
   renderPreview(gs, valid)
   $('validation').hidden = !problem; $('validation').textContent = problem
   $('apply').toggleAttribute('disabled', busy || uploading || !selection || !!selection.error || !!selection.detecting || !valid || count === 0 || count > 10000 || !segmenter)
   $('restore').toggleAttribute('disabled', busy || !selection?.canRestore)
-  for (const id of ['fontFile', 'ramp']) $(id).toggleAttribute('disabled', busy)
+  for (const id of ['fontFile', 'direction']) $(id).toggleAttribute('disabled', busy)
   $('apply').textContent = busy && activeAction === 'apply' ? 'Applying…' : 'Apply'
   $('restore').textContent = busy && activeAction === 'restore' ? 'Restoring…' : 'Restore'
-  $('step-count').textContent = count ? count.toLocaleString('en') + (count === 1 ? ' letter' : ' letters') : ''
   if (selection) {
-    $('selection').textContent = selection.error || (selection.family ? selection.family + ' · ' + count.toLocaleString('en') + (count === 1 ? ' letter' : ' letters') : 'Select one text layer to get started.')
+    $('selection').textContent = selection.error || (selection.family ? selection.family + ' · ' + count.toLocaleString('en') + (count === 1 ? ' letter' : ' letters') : 'Select one text layer')
     $('selection').classList.toggle('error', !!selection.error)
   }
   if (!segmenter) message('Update Figma to enable reliable letter-by-letter text processing.', true)
 }
 
 // ---------- events ----------
-$('position').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { settings.shape.position = Math.max(0, Math.min(1, v / 100)); update() } })
-$('falloff').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { settings.shape.falloff = Math.max(0.01, Math.min(1, v / 100)); update() } })
-$('curve').addEventListener('change', e => { settings.shape.curve = readControl(e.currentTarget as Control) as Curve; update() })
+$('position').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { editedShape().position = Math.max(0, Math.min(1, v / 100)); update() } })
+$('falloff').addEventListener('input', e => { const v = Number(readControl(e.currentTarget as Control)); if (Number.isFinite(v)) { editedShape().falloff = Math.max(0.01, Math.min(1, v / 100)); update() } })
+const onCurve = (e: Event) => {
+  const detail = (e as CustomEvent).detail
+  const b = parseBezier(detail?.value ?? readControl(e.currentTarget as Control))
+  if (b) { editedShape().bezier = b; update() }
+}
+$('curve').addEventListener('input', onCurve)
+$('curve').addEventListener('change', onCurve)
+$('toggle-values').addEventListener('click', () => { showValues = !showValues; update() })
 $('mode').addEventListener('change', e => { settings.mode = readControl(e.currentTarget as Control) === 'word' ? 'word' : 'text'; update() })
-$('ramp').addEventListener('click', () => { settings.shape = { ...DEFAULT_SHAPE }; update() })
+// Toggle: Start → End ↔ End → Start; from any other shape it starts a Start → End ramp.
+$('direction').addEventListener('click', () => {
+  const sh = editedShape()
+  const position = isRamp(sh) === 'forward' ? 0 : 1
+  delete sh.bezier
+  Object.assign(sh, DEFAULT_SHAPE, { position })
+  update()
+})
 $('show-file').addEventListener('click', () => { $('file-panel').hidden = false; update() })
 $('fontFile').addEventListener('change', async event => {
   const version = ++uploadVersion
@@ -291,11 +455,19 @@ window.addEventListener('message', event => {
   if (!msg) return
   if (msg.type === 'selection') {
     connected = true; uploading = false
-    const changed = lastId !== msg.id
-    selection = msg as Selection; lastId = msg.id
-    if (changed) {
+    const newLayer = lastId !== msg.id
+    // Same layer, different font: the axes no longer match, so start over with this font's
+    // axes but keep the progression the user has dialled in.
+    const newFont = !newLayer && !!msg.family && !!lastFamily && lastFamily !== msg.family
+    selection = msg as Selection; lastId = msg.id; lastFamily = msg.family || lastFamily
+    if (newLayer) {
+      target = null; editingRange = null
       settings = msg.settings ? JSON.parse(JSON.stringify(msg.settings)) : { version: 2, axes: {}, shape: { ...DEFAULT_SHAPE }, mode: settings.mode }
       message('')
+    } else if (newFont) {
+      target = null; editingRange = null
+      settings = { version: 2, axes: {}, shape: settings.shape, mode: settings.mode }
+      message('Font changed to ' + msg.family + '. Axes reloaded.')
     }
     reconcile()
     update()
@@ -314,5 +486,5 @@ send({ type: 'ready' })
 update()
 for (const delay of [100, 500, 1500, 4000]) setTimeout(() => { if (!connected) send({ type: 'ready' }) }, delay)
 setTimeout(() => { if (!connected) message('Could not connect to the selected text. Close and reopen the plugin to try again.', true) }, 6000)
-for (const tag of ['fig-input-number', 'fig-dropdown', 'fig-input-file', 'fig-button', 'fig-slider', 'fig-switch']) customElements.whenDefined(tag).then(() => update())
+for (const tag of ['fig-input-number', 'fig-dropdown', 'fig-input-file', 'fig-button', 'fig-slider', 'fig-switch', 'fig-easing-curve']) customElements.whenDefined(tag).then(() => update())
 window.addEventListener('error', () => { message('Some controls could not load. Close and reopen the plugin to try again.', true) })

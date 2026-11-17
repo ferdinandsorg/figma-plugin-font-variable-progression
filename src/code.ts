@@ -1,5 +1,5 @@
 import { AxisRange, registeredRange } from './axes'
-import { DEFAULT_SHAPE, Settings, computeValues } from './engine'
+import { DEFAULT_SHAPE, Settings, Shape, computeValues } from './engine'
 import { FontMeta, parseFont } from './fontfile'
 import { cachedRanges, detectRanges } from './probe'
 
@@ -10,26 +10,41 @@ type Original = { characters: string; ranges: FontRange[] }
 type Saved = { version: 2; settings: Settings; original: Original }
 type SavedV1 = { version: 1; params: { startWeight?: number; endWeight?: number; mode?: string }; original: Original }
 type Glyph = { start: number; end: number }
-type Message = { type: string; height?: number; bytes?: number[]; settings?: Settings; id?: string; characters?: string; groups?: Glyph[][] }
+type Message = { type: string; height?: number; bytes?: number[]; settings?: Settings; id?: string; characters?: string; groups?: Glyph[][]; family?: string; tag?: string; min?: number; max?: number; reset?: boolean }
+type Overrides = { [tag: string]: { min: number; max: number } }
 type Detection = { status: 'detecting' | 'done' | 'error'; ranges: AxisRange[] | null; progress?: { done: number; total: number; tag: string } }
 let uploaded: FontMeta | null = null
 let busy = false
 const detections = new Map<string, Detection>()
+// Manually corrected axis ranges per family, persisted in clientStorage.
+const overrides = new Map<string, Overrides>()
+const OVERRIDES_KEY = (family: string) => `rangeOverrides:v1:${family}`
 
+// Sanitize settings coming from the UI or from stored plugin data.
+const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+function normalizeShape(input: unknown): Shape | null {
+  const sh = input as Partial<Shape> | null
+  if (!sh || typeof sh !== 'object' || !isNum(sh.position) || !isNum(sh.falloff)) return null
+  const curve = sh.curve === 'smooth' || sh.curve === 'easeIn' || sh.curve === 'easeOut' ? sh.curve : 'linear'
+  const out: Shape = { position: Math.max(0, Math.min(1, sh.position)), falloff: Math.max(0.01, Math.min(1, sh.falloff)), curve }
+  const b = sh.bezier
+  if (Array.isArray(b) && b.length === 4 && b.every(isNum)) out.bezier = [Math.max(0, Math.min(1, b[0])), b[1], Math.max(0, Math.min(1, b[2])), b[3]]
+  return out
+}
 // Sanitize settings coming from the UI or from stored plugin data.
 function normalizeSettings(input: unknown): Settings | null {
   const v = input as Partial<Settings> | null
-  if (!v || typeof v !== 'object' || !v.axes || typeof v.axes !== 'object' || !v.shape) return null
-  const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+  if (!v || typeof v !== 'object' || !v.axes || typeof v.axes !== 'object') return null
+  const shape = normalizeShape(v.shape)
+  if (!shape) return null
   const axes: Settings['axes'] = {}
   for (const [tag, a] of Object.entries(v.axes)) {
-    if (!/^[\x20-\x7e]{4}$/.test(tag) || !a || !num(a.base) || !num(a.peak)) return null
-    axes[tag] = { enabled: !!a.enabled, base: a.base, peak: a.peak }
+    if (!/^[\x20-\x7e]{4}$/.test(tag) || !a || !isNum(a.base) || !isNum(a.peak)) return null
+    const own = a.shape === undefined ? null : normalizeShape(a.shape)
+    if (a.shape !== undefined && !own) return null
+    axes[tag] = own ? { enabled: !!a.enabled, base: a.base, peak: a.peak, shape: own } : { enabled: !!a.enabled, base: a.base, peak: a.peak }
   }
-  const sh = v.shape
-  if (!num(sh.position) || !num(sh.falloff)) return null
-  const curve = sh.curve === 'smooth' || sh.curve === 'easeIn' || sh.curve === 'easeOut' ? sh.curve : 'linear'
-  return { version: 2, axes, shape: { position: Math.max(0, Math.min(1, sh.position)), falloff: Math.max(0.01, Math.min(1, sh.falloff)), curve }, mode: v.mode === 'word' ? 'word' : 'text' }
+  return { version: 2, axes, shape, mode: v.mode === 'word' ? 'word' : 'text' }
 }
 function readSaved(node: TextNode): Saved | null {
   try {
@@ -89,13 +104,46 @@ function selectionInfo(): Info {
 // Axis ranges for the selected family: a matching font file wins, then detection,
 // then (if detection failed) the spec-wide ranges so the user can still work.
 type AxesSource = 'file' | 'detected' | 'fallback'
-function effectiveAxes(info: Info): { axes: AxisRange[]; source: AxesSource } | null {
+function baseAxes(info: Info): { axes: AxisRange[]; source: AxesSource } | null {
   if (!info.family) return null
   if (uploaded && fileMatches(info.family)) return { axes: uploaded.axes, source: 'file' }
   const detection = detections.get(info.family)
   if (detection?.status === 'done' && detection.ranges) return { axes: detection.ranges, source: 'detected' }
   if (detection?.status === 'error') return { axes: info.axisTags.map(t => registeredRange(t, info.font?.variationSettings?.[t] ?? 0)), source: 'fallback' }
   return null
+}
+// Manual corrections win over every other source.
+function effectiveAxes(info: Info): { axes: AxisRange[]; source: AxesSource } | null {
+  const base = baseAxes(info)
+  const own = info.family ? overrides.get(info.family) : undefined
+  if (!base || !own) return base
+  return { ...base, axes: base.axes.map(a => own[a.tag] && a.source !== 'unavailable' ? { ...a, ...own[a.tag], source: 'manual' as const } : a) }
+}
+async function loadOverrides(family: string): Promise<void> {
+  if (overrides.has(family)) return
+  overrides.set(family, {})
+  try {
+    const stored = await figma.clientStorage.getAsync(OVERRIDES_KEY(family)) as Overrides | undefined
+    if (stored && typeof stored === 'object') {
+      const clean: Overrides = {}
+      for (const [tag, r] of Object.entries(stored)) if (r && isNum(r.min) && isNum(r.max) && r.min < r.max) clean[tag] = { min: r.min, max: r.max }
+      overrides.set(family, clean)
+      if (Object.keys(clean).length) refresh()
+    }
+  } catch { /* overrides are optional */ }
+}
+async function setOverride(msg: Message): Promise<void> {
+  const family = msg.family, tag = msg.tag
+  if (!family || !tag || selectionInfo().family !== family) return
+  await loadOverrides(family)
+  const own = { ...(overrides.get(family) || {}) }
+  if (msg.reset) delete own[tag]
+  else if (isNum(msg.min) && isNum(msg.max) && msg.min < msg.max) own[tag] = { min: msg.min, max: msg.max }
+  else { postStatus('The minimum must be smaller than the maximum.', true); return }
+  overrides.set(family, own)
+  try { await figma.clientStorage.setAsync(OVERRIDES_KEY(family), own) } catch { /* keep in memory */ }
+  refresh()
+  postStatus(msg.reset ? 'Range reset.' : 'Range saved for ' + family + '.')
 }
 function adjustableAxes(info: Info): AxisRange[] | null {
   const e = effectiveAxes(info)
@@ -126,6 +174,7 @@ function refresh(): void {
     const fileError = uploaded && info.family && !fileMatches(info.family) ? 'The loaded font file is ' + uploaded.families[0] + ', not ' + info.family + '.' : ''
     const detection = info.family ? detections.get(info.family) : undefined
     if (info.family && info.axisTags.length && !detection) void ensureDetection(info)
+    if (info.family && !overrides.has(info.family)) void loadOverrides(info.family)
     const effective = effectiveAxes(info)
     figma.ui.postMessage({
       type: 'selection', id: info.node?.id, characters: info.node?.characters || '', family: info.family, error: info.error, fileError,
@@ -204,7 +253,7 @@ async function apply(msg: Message): Promise<void> {
       }
     }
     node.setPluginData(KEY, JSON.stringify({ version: 2, settings, original } satisfies Saved))
-    node.setRelaunchData({ ...node.getRelaunchData(), [TOOL_ID]: 'Font weight gradient' })
+    node.setRelaunchData({ ...node.getRelaunchData(), [TOOL_ID]: 'Font Axis Gradient' })
     figma.commitUndo()
   } catch (error) {
     for (const r of before) node.setRangeFontName(r.start, r.end, r.fontName)
@@ -231,10 +280,33 @@ async function restore(): Promise<void> {
 
 figma.showUI(__html__, { width: 300, height: 320, themeColors: true })
 figma.on('selectionchange', () => { if (!busy) refresh() })
+
+// Font (or text) changes on the selected layer don't fire selectionchange; watch the page.
+let watchedPage: PageNode | null = null
+let changeTimer: number | undefined
+const WATCHED: NodeChangeProperty[] = ['fontName', 'characters', 'styledTextSegments', 'textStyleId']
+function onNodeChange(event: NodeChangeEvent): void {
+  if (busy) return
+  const node = selected()
+  if (!node) return
+  const relevant = event.nodeChanges.some(c => c.id === node.id && (c.type !== 'PROPERTY_CHANGE' || c.properties.some(p => WATCHED.includes(p))))
+  if (!relevant) return
+  if (changeTimer !== undefined) clearTimeout(changeTimer)
+  changeTimer = setTimeout(refresh, 120)
+}
+function watchPage(): void {
+  if (watchedPage === figma.currentPage) return
+  watchedPage?.off('nodechange', onNodeChange)
+  watchedPage = figma.currentPage
+  watchedPage.on('nodechange', onNodeChange)
+}
+watchPage()
+figma.on('currentpagechange', () => { watchPage(); if (!busy) refresh() })
 figma.ui.onmessage = async (msg: Message) => {
-  if (msg.type === 'resize' && typeof msg.height === 'number' && Number.isFinite(msg.height)) { figma.ui.resize(300, Math.max(100, Math.min(900, Math.round(msg.height)))); return }
+  if (msg.type === 'resize' && typeof msg.height === 'number' && Number.isFinite(msg.height)) { figma.ui.resize(300, Math.max(100, Math.min(760, Math.round(msg.height)))); return }
   if (msg.type === 'ready') { refresh(); return }
   if (busy) return
+  if (msg.type === 'range-override') { await setOverride(msg); return }
   if (msg.type === 'file') {
     uploaded = null
     if (!msg.bytes) { refresh(); postStatus('No font file loaded. Detected ranges are used instead.'); return }
