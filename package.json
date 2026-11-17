@@ -1,0 +1,19 @@
+{
+  "name": "figma-plugin-font-variable-progression",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Figma plugin: progressive variable font axis values per letter",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.ui.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.142.0",
+    "@rogieking/figui3": "^12.0.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

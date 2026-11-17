@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    try { window.localStorage.getItem('x') } catch (e) {
+      const store = new Map()
+      Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+        getItem: k => store.has(String(k)) ? store.get(String(k)) : null,
+        setItem: (k,v) => store.set(String(k),String(v)), removeItem: k => store.delete(String(k)),
+        clear: () => store.clear(), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size }
+      } })
+    }
+  </script>
+  <style>
+    /* Use the reference's native Figma scale instead of the previous compact preset. */
+    :root {
+      --primary:#0D99FF;
+      --ring:var(--primary);
+      --font-family:Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --body-medium-fontSize:12px;
+      --body-medium-lineHeight:20px;
+      --body-small-fontSize:12px;
+      --body-small-lineHeight:18px;
+      --body-medium-strong-fontWeight:600;
+    }
+    body {
+      --figma-color-bg-brand:var(--primary);
+      --figma-color-bg-brand-hover:color-mix(in srgb,var(--primary) 88%,black);
+      --figma-color-bg-brand-pressed:color-mix(in srgb,var(--primary) 78%,black);
+      --figma-color-border-brand:var(--primary);
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; padding:0; height:auto; min-height:0; background:var(--figma-color-bg); color:var(--figma-color-text); font:var(--body-medium-fontSize)/var(--body-medium-lineHeight) var(--font-family); }
+    [hidden] { display:none !important; }
+    p,h1,h2 { margin:0; }
+    h1 { font-size:14px; line-height:20px; font-weight:600; }
+    h2 { font:600 12px/20px var(--font-family); }
+    .intro { padding:16px; display:grid; gap:8px; border-bottom:1px solid var(--figma-color-border); }
+    .secondary,.helper { color:var(--figma-color-text-secondary); }
+    .selection-summary { padding:16px; display:grid; gap:8px; border-bottom:1px solid var(--figma-color-border); }
+    .section-label { font-weight:500; }
+    #selection { overflow-wrap:anywhere; }
+    #selection.error,#validation { color:var(--figma-color-text-danger); }
+    .settings-section { padding:16px; display:grid; gap:12px; border-bottom:1px solid var(--figma-color-border); }
+    .field-stack { display:grid; gap:8px; }
+    .field-row { min-height:32px; display:grid; align-items:center; }
+    .swap-row { display:flex; justify-content:flex-end; }
+    .helper { font-size:12px; line-height:18px; overflow-wrap:anywhere; }
+    .section-heading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+    .badge { color:var(--figma-color-text-secondary); }
+    .detecting { display:grid; gap:8px; }
+    .detecting-row { display:flex; align-items:center; gap:8px; }
+    .progress { height:2px; border-radius:1px; background:var(--figma-color-bg-tertiary); overflow:hidden; }
+    .progress > div { height:100%; width:0; background:var(--figma-color-bg-brand); transition:width .2s ease; }
+    .fallback { display:grid; gap:8px; }
+    .link-button { all:unset; cursor:pointer; color:var(--figma-color-text-brand); font-size:12px; line-height:18px; justify-self:start; }
+    .link-button:hover { text-decoration:underline; }
+    .link-button:focus-visible { outline:2px solid var(--ring); outline-offset:2px; border-radius:2px; }
+    .notice { color:var(--figma-color-text-warning); }
+    .axis-list { display:grid; gap:4px; }
+    .axis-list:empty { display:none; }
+    .axis { display:grid; gap:8px; padding:6px 0; min-width:0; }
+    .axis + .axis { border-top:1px solid var(--figma-color-border); padding-top:10px; }
+    .axis-head { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:center; min-height:24px; font-variant-numeric:tabular-nums; }
+    .axis-head .title { display:flex; gap:6px; align-items:baseline; min-width:0; }
+    .axis-head .title span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .axis-head code { font:500 11px/18px ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--figma-color-text-secondary); }
+    .axis-head .range { color:var(--figma-color-text-secondary); }
+    .axis.on .axis-head .title span { font-weight:600; }
+    .axis.unavailable { color:var(--figma-color-text-tertiary); }
+    .axis.unavailable code, .axis.unavailable .range { color:var(--figma-color-text-tertiary); }
+    .axis-switch-spacer { width:24px; }
+    .axis-values { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+    .axis-values > div { min-width:0; }
+    .axis-values fig-input-number { width:100%; min-width:0; }
+    .axis-values label { display:block; color:var(--figma-color-text-secondary); font-size:11px; line-height:16px; margin-bottom:2px; }
+    .bars { display:flex; align-items:flex-end; gap:2px; height:64px; padding:8px 8px 0; }
+    .bar { flex:1 1 0; min-width:0; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%; justify-content:flex-end; cursor:pointer; border:0; background:none; padding:0; color:inherit; font:inherit; }
+    .bar i { display:block; width:100%; max-width:18px; min-height:2px; border-radius:2px 2px 0 0; background:var(--figma-color-bg-brand); opacity:.85; }
+    .bar.peak i { opacity:1; box-shadow:0 0 0 1px var(--figma-color-border-brand-strong); }
+    .bar span { font-size:11px; line-height:14px; color:var(--figma-color-text-secondary); }
+    .bar:hover span, .bar.peak span { color:var(--figma-color-text); }
+    .bar:focus-visible { outline:2px solid var(--ring); outline-offset:1px; border-radius:2px; }
+    .bars-more { font-size:11px; color:var(--figma-color-text-tertiary); align-self:center; padding-left:4px; }
+    .preview-section { padding:16px; display:grid; gap:12px; }
+    .preview-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .preview-box { padding:12px; background:var(--figma-color-bg-secondary); border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); }
+    #preview { font-size:13px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; line-height:22px; }
+    #status { margin:0 16px 16px; padding:12px; border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); color:var(--figma-color-text-secondary); overflow-wrap:anywhere; }
+    #status:empty { display:none; }
+    #status.error { color:var(--figma-color-text-danger); border-color:var(--figma-color-border-danger); }
+    fig-footer { background:var(--figma-color-bg); }
+    fig-field,fig-field > label,fig-input-number,fig-dropdown,fig-input-file,fig-button { font-size:12px; line-height:20px; }
+    fig-input-number,fig-dropdown,fig-button { min-height:32px; }
+    fig-input-number input,fig-dropdown select,fig-button button { font:inherit; min-height:32px; }
+    #apply:not([disabled]) { background:var(--primary); border-color:var(--primary); color:oklch(.145 0 0); }
+    #apply:not([disabled]):hover { background:color-mix(in srgb,var(--primary) 88%,black); }
+    #apply:focus-visible,fig-input-number:focus-within { outline:2px solid var(--ring); outline-offset:2px; }
+  </style>
+</head>
+<body>
+<div id="plugin-root">
+  <header class="intro"><h1>Font weight gradient</h1><p class="secondary">Vary variable font axes, letter by letter.</p></header>
+  <div class="selection-summary"><p class="section-label">Selected text</p><p id="selection" class="secondary">Select one text layer to get started.</p></div>
+  <fig-content>
+    <section class="settings-section" aria-labelledby="axes-heading">
+      <div class="section-heading"><h2 id="axes-heading">Variable axes</h2><span id="axes-badge" class="badge"></span></div>
+      <div id="detecting" class="detecting" hidden>
+        <div class="detecting-row"><fig-spinner size="small"></fig-spinner><span id="detecting-text" class="secondary">Measuring axis ranges…</span></div>
+        <div class="progress" aria-hidden="true"><div id="progress-bar"></div></div>
+      </div>
+      <div id="axes" class="axis-list"></div>
+      <p id="axes-help" class="helper" hidden></p>
+      <p id="file-notice" class="helper notice" hidden></p>
+      <div class="fallback">
+        <button id="show-file" class="link-button" type="button" aria-expanded="false" aria-controls="file-panel">Ranges look wrong? Use the font file</button>
+        <div id="file-panel" class="fallback" hidden>
+          <fig-input-file id="fontFile" accepts=".ttf,.otf" label="Choose TTF or OTF" full></fig-input-file>
+          <p class="helper">Exact ranges are read locally from the file. It is not installed or saved.</p>
+        </div>
+      </div>
+      <p id="validation" class="helper" role="status" hidden></p>
+    </section>
+    <section class="settings-section" aria-labelledby="shape-heading">
+      <div class="section-heading"><h2 id="shape-heading">Progression</h2><fig-button id="ramp" variant="ghost" title="Reset to a start → end ramp">Start → End</fig-button></div>
+      <div class="field-stack">
+        <div class="field-row"><fig-field columns="2/5"><label>Peak position</label><fig-slider id="position" value="100" min="0" max="100" step="1" text="true" units="%" full></fig-slider></fig-field></div>
+        <div class="field-row"><fig-field columns="2/5"><label>Falloff</label><fig-slider id="falloff" value="100" min="1" max="100" step="1" text="true" units="%" full></fig-slider></fig-field></div>
+        <div class="field-row"><fig-field columns="2/5"><label>Curve</label><fig-dropdown id="curve" value="linear" label="Curve" full><option value="linear">Linear</option><option value="smooth">Smooth</option><option value="easeIn">Ease in</option><option value="easeOut">Ease out</option></fig-dropdown></fig-field></div>
+        <div class="field-row"><fig-field columns="2/5"><label>Apply across</label><fig-dropdown id="mode" value="text" label="Distribution" full><option value="text">Entire text</option><option value="word">Each word</option></fig-dropdown></fig-field></div>
+      </div>
+      <p id="shape-help" class="helper"></p>
+    </section>
+  </fig-content>
+  <section class="preview-section" aria-label="Preview">
+    <div class="preview-heading"><p class="section-label">Preview</p><p id="step-count" class="secondary"></p></div>
+    <div class="preview-box"><div id="bars" class="bars" role="group" aria-label="Strength per letter. Choose a letter to move the peak there."></div><p id="preview-empty" class="helper">Select text to see the progression.</p></div>
+    <p id="preview-values" class="helper"></p>
+  </section>
+  <div id="status" role="status" aria-live="polite"></div>
+  <fig-footer sticky><fig-button id="restore" variant="secondary" title="Restore the original font settings" disabled>Restore</fig-button><fig-button id="apply" variant="primary" type="submit" disabled full>Apply</fig-button></fig-footer>
+</div>
+<!-- UI_SCRIPT -->
+</body>
+</html>

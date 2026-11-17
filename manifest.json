@@ -2,17 +2,15 @@
   "name": "Font weight gradient",
   "id": "f5640f22-a592-4f4f-8903-2397d80a7bee",
   "api": "1.0.0",
-  "main": "code.js",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
   "documentAccess": "dynamic-page",
-  "editorType": [
-    "figma"
-  ],
-  "isTool": true,
+  "editorType": ["figma"],
+  "networkAccess": { "allowedDomains": ["none"] },
   "relaunchButtons": [
     {
       "command": "f5640f22-a592-4f4f-8903-2397d80a7bee",
       "name": "Font weight gradient"
     }
-  ],
-  "ui": "ui.html"
+  ]
 }
