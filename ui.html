@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <script>
+    try { window.localStorage.getItem('x') } catch (e) {
+      const store = new Map()
+      Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+        getItem: k => store.has(String(k)) ? store.get(String(k)) : null,
+        setItem: (k,v) => store.set(String(k),String(v)), removeItem: k => store.delete(String(k)),
+        clear: () => store.clear(), key: i => Array.from(store.keys())[i] ?? null, get length() { return store.size }
+      } })
+    }
+  </script>
+  <style>
+    /* Use the reference's native Figma scale instead of the previous compact preset. */
+    :root {
+      --primary:#0D99FF;
+      --ring:var(--primary);
+      --font-family:Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --body-medium-fontSize:12px;
+      --body-medium-lineHeight:20px;
+      --body-small-fontSize:12px;
+      --body-small-lineHeight:18px;
+      --body-medium-strong-fontWeight:600;
+    }
+    body {
+      --figma-color-bg-brand:var(--primary);
+      --figma-color-bg-brand-hover:color-mix(in srgb,var(--primary) 88%,black);
+      --figma-color-bg-brand-pressed:color-mix(in srgb,var(--primary) 78%,black);
+      --figma-color-border-brand:var(--primary);
+    }
+    * { box-sizing:border-box; }
+    html,body { margin:0; padding:0; height:auto; min-height:0; background:var(--figma-color-bg); color:var(--figma-color-text); font:var(--body-medium-fontSize)/var(--body-medium-lineHeight) var(--font-family); }
+    [hidden] { display:none !important; }
+    p,h1,h2 { margin:0; }
+    h1 { font-size:14px; line-height:20px; font-weight:600; }
+    h2 { font:600 12px/20px var(--font-family); }
+    .intro { padding:16px; display:grid; gap:8px; border-bottom:1px solid var(--figma-color-border); }
+    .secondary,.helper { color:var(--figma-color-text-secondary); }
+    .selection-summary { padding:16px; display:grid; gap:8px; border-bottom:1px solid var(--figma-color-border); }
+    .section-label { font-weight:500; }
+    #selection { overflow-wrap:anywhere; }
+    #selection.error,#validation { color:var(--figma-color-text-danger); }
+    .tabs-shell { padding:12px 16px; border-bottom:1px solid var(--figma-color-border); }
+    .settings-section { padding:16px; display:grid; gap:12px; border-bottom:1px solid var(--figma-color-border); }
+    .field-stack { display:grid; gap:8px; }
+    .field-row { min-height:32px; display:grid; align-items:center; }
+    .swap-row { display:flex; justify-content:flex-end; }
+    #file-section { display:grid; gap:12px; }
+    .helper { font-size:12px; line-height:18px; overflow-wrap:anywhere; }
+    .preview-section { padding:16px; display:grid; gap:12px; }
+    .preview-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .preview-box { padding:12px; background:var(--figma-color-bg-secondary); border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); }
+    #preview { font-size:13px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; line-height:22px; }
+    #status { margin:0 16px 16px; padding:12px; border:1px solid var(--figma-color-border); border-radius:var(--radius-medium,6px); color:var(--figma-color-text-secondary); overflow-wrap:anywhere; }
+    #status:empty { display:none; }
+    #status.error { color:var(--figma-color-text-danger); border-color:var(--figma-color-border-danger); }
+    fig-footer { background:var(--figma-color-bg); }
+    fig-field,fig-field > label,fig-input-number,fig-dropdown,fig-input-file,fig-button,fig-tab { font-size:12px; line-height:20px; }
+    fig-input-number,fig-dropdown,fig-button { min-height:32px; }
+    fig-input-number input,fig-dropdown select,fig-button button { font:inherit; min-height:32px; }
+    #source fig-tab { flex:1; min-width:0; min-height:32px; text-align:center; }
+    #source fig-tab[selected] { color:var(--figma-color-text); }
+    #source fig-tab:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+    #apply:not([disabled]) { background:var(--primary); border-color:var(--primary); color:oklch(.145 0 0); }
+    #apply:not([disabled]):hover { background:color-mix(in srgb,var(--primary) 88%,black); }
+    #apply:focus-visible,fig-input-number:focus-within { outline:2px solid var(--ring); outline-offset:2px; }
+  </style>
+</head>
+<body>
+<div id="plugin-root">
+  <header class="intro"><h1>Font weight gradient</h1><p class="secondary">Blend variable font weights, letter by letter.</p></header>
+  <div class="selection-summary"><p class="section-label">Selected text</p><p id="selection" class="secondary">Select one text layer to get started.</p></div>
+  <fig-content>
+    <div class="tabs-shell">
+    <fig-tabs id="source" value="manual" name="Weight range source" aria-label="Weight range source">
+      <fig-tab id="source-manual" selected full>Manual entry</fig-tab>
+      <fig-tab id="source-file" full>Font file</fig-tab>
+    </fig-tabs>
+    </div>
+    <section class="settings-section" aria-label="Weight range">
+      <h2>Weight range</h2>
+      <fig-tab-content id="manual-section" role="tabpanel" aria-labelledby="source-manual"><p class="helper">No font file required.</p></fig-tab-content>
+      <fig-tab-content id="file-section" role="tabpanel" aria-labelledby="source-file" hidden>
+        <fig-field direction="vertical"><label>Matching variable font</label><fig-input-file id="fontFile" accepts=".ttf,.otf" label="Choose TTF or OTF" full></fig-input-file></fig-field>
+        <p class="helper">Read locally to find exact limits. The file is not installed or saved.</p>
+      </fig-tab-content>
+      <div class="field-stack">
+        <div class="field-row"><fig-field columns="2/5"><label>Start weight</label><fig-input-number id="startWeight" value="100" min="1" max="1000" step="1" precision="2" aria-label="Start weight" aria-describedby="range validation" full></fig-input-number></fig-field></div>
+        <div class="field-row"><fig-field columns="2/5"><label>End weight</label><fig-input-number id="endWeight" value="900" min="1" max="1000" step="1" precision="2" aria-label="End weight" aria-describedby="range validation" full></fig-input-number></fig-field></div>
+      </div>
+      <div class="swap-row"><fig-button id="reverse" variant="ghost" title="Swap start and end weights">Swap start and end</fig-button></div>
+      <p id="range" class="helper">Use weights supported by your font. Upload its file to check exact limits.</p>
+      <p id="validation" class="helper" role="status" hidden></p>
+    </section>
+    <section class="settings-section" aria-label="Distribution">
+      <div class="field-row"><fig-field columns="2/5"><label>Apply across</label><fig-dropdown id="mode" value="text" label="Weight distribution" full><option value="text">Entire text</option><option value="word">Each word</option></fig-dropdown></fig-field></div>
+      <p id="distribution-help" class="helper">One continuous gradient across the selected text.</p>
+    </section>
+  </fig-content>
+  <section class="preview-section" aria-label="Calculated weight steps">
+    <div class="preview-heading"><p class="section-label">Weight steps</p><p id="step-count" class="secondary">Linear</p></div>
+    <div class="preview-box"><p id="preview">Select text to see calculated weights.</p></div>
+    <p class="helper">Spaces stay unchanged. A single letter uses the start weight.</p>
+  </section>
+  <div id="status" role="status" aria-live="polite"></div>
+  <fig-footer sticky><fig-button id="restore" variant="secondary" title="Restore the original font weights" disabled>Restore</fig-button><fig-button id="apply" variant="primary" type="submit" disabled full>Apply gradient</fig-button></fig-footer>
+</div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id)
+  const send = msg => parent.postMessage({ pluginMessage: msg }, '*')
+  // The runtime tab API supports these mappings; the bundled HTML manifest omits them.
+  for (const [id, value, content] of [['source-manual','manual','#manual-section'],['source-file','file','#file-section']]) {
+    $(id).setAttribute('value', value)
+    $(id).setAttribute('content', content)
+  }
+  let selection = null, meta = null, busy = false, uploading = false, uploadVersion = 0, lastId = null, connected = false, activeAction = 'apply'
+  let requested = { startWeight: Number($('startWeight').getAttribute('value')), endWeight: Number($('endWeight').getAttribute('value')), mode: $('mode').getAttribute('value'), source: $('source').getAttribute('value') }
+  let segmenter = null
+  try { segmenter = new Intl.Segmenter('en', { granularity: 'grapheme' }) } catch (e) { /* disable safely on older engines */ }
+  function setValue(id, value) {
+    const el = $(id)
+    el.setAttribute('value', String(value))
+    if (customElements.get(el.localName)) el.value = String(value)
+    if (id === 'source') {
+      $('source-manual').toggleAttribute('selected', value !== 'file')
+      $('source-file').toggleAttribute('selected', value === 'file')
+    }
+  }
+  function controlValue(id) {
+    const el = $(id)
+    return customElements.get(el.localName) ? el.value : el.getAttribute('value')
+  }
+  function params() { return { startWeight: Number(controlValue('startWeight')), endWeight: Number(controlValue('endWeight')), mode: controlValue('mode') === 'word' ? 'word' : 'text', source: controlValue('source') === 'file' ? 'file' : 'manual' } }
+  function groups() {
+    if (!selection || !segmenter) return []
+    const result = [], all = []; let word = []
+    for (const g of segmenter.segment(selection.characters)) {
+      if (/\s/.test(g.segment)) { if (word.length) result.push(word); word = []; continue }
+      const glyph = { start: g.index, end: g.index + g.segment.length }
+      all.push(glyph); word.push(glyph)
+    }
+    if (word.length) result.push(word)
+    return params().mode === 'word' ? result : (all.length ? [all] : [])
+  }
+  function message(text, error = false) { $('status').textContent = text; $('status').classList.toggle('error', error) }
+  function update() {
+    const p = params(), fileMode = p.source === 'file', min = fileMode && meta ? meta.min : 1, max = fileMode && meta ? meta.max : 1000
+    const valid = (!fileMode || !!meta) && controlValue('startWeight') !== '' && controlValue('endWeight') !== '' && Number.isFinite(p.startWeight) && Number.isFinite(p.endWeight) && p.startWeight >= min && p.startWeight <= max && p.endWeight >= min && p.endWeight <= max
+    const gs = groups(), count = gs.reduce((n,g) => n + g.length,0)
+    $('apply').toggleAttribute('disabled', busy || uploading || !selection || !!selection.error || (fileMode && !!selection.fileError) || !valid || count === 0 || count > 10000 || !segmenter)
+    $('restore').toggleAttribute('disabled', busy || !selection?.canRestore)
+    $('reverse').toggleAttribute('disabled', busy)
+    for (const id of ['startWeight','endWeight','mode','source','fontFile']) $(id).toggleAttribute('disabled', busy)
+    $('source-manual').toggleAttribute('disabled', busy)
+    $('source-file').toggleAttribute('disabled', busy)
+    $('apply').textContent = busy && activeAction === 'apply' ? 'Applying…' : 'Apply gradient'
+    $('restore').textContent = busy && activeAction === 'restore' ? 'Restoring…' : 'Restore'
+    $('file-section').hidden = !fileMode
+    $('manual-section').hidden = fileMode
+    $('range').textContent = fileMode ? (meta ? 'Available: ' + meta.min + '–' + meta.max + ' · Default ' + meta.defaultValue : 'Choose the matching font file to read its limits.') : 'Input range: 1–1000. Font-specific limits require a font file.'
+    $('validation').hidden = valid || (fileMode && !meta)
+    $('validation').textContent = 'Enter a start and end weight between ' + min + ' and ' + max + '.'
+    $('distribution-help').textContent = p.mode === 'word' ? 'Restart the gradient at the beginning of each word.' : 'One continuous gradient across the selected text.'
+    $('step-count').textContent = count ? count.toLocaleString('en') + (count === 1 ? ' letter' : ' letters') : 'Linear'
+    if (selection) {
+      const error = selection.error || (fileMode && selection.fileError)
+      $('selection').textContent = error || (selection.family ? selection.family + ' · ' + count.toLocaleString('en') + (count === 1 ? ' letter' : ' letters') : 'Select one text layer to get started.')
+      $('selection').classList.toggle('error', !!error)
+    }
+    if (valid && gs.length) {
+      const g = gs[0], n = g.length
+      const values = g.slice(0,6).map((glyph,i) => selection.characters.slice(glyph.start,glyph.end) + ' ' + Number((p.startWeight + (p.endWeight-p.startWeight)*(n === 1 ? 0 : i/(n-1))).toFixed(2)))
+      $('preview').textContent = values.join(' · ') + (n > 6 ? ' · …' : '')
+    } else $('preview').textContent = !selection || !count ? 'Select text to see calculated weights.' : 'Enter valid weights to see the steps.'
+    if (!segmenter) message('Update Figma to enable reliable letter-by-letter text processing.', true)
+  }
+  function constrain() {
+    const fileMode = requested.source === 'file'
+    const min = fileMode && meta ? meta.min : 1, max = fileMode && meta ? meta.max : 1000
+    for (const id of ['startWeight','endWeight']) {
+      $(id).setAttribute('min', String(min)); $(id).setAttribute('max', String(max))
+      const v = Number(requested[id])
+      setValue(id, Number.isFinite(v) ? Math.max(min,Math.min(max,v)) : (id === 'startWeight' ? min : max))
+    }
+    setValue('mode', requested.mode === 'word' ? 'word' : 'text')
+    setValue('source', fileMode ? 'file' : 'manual')
+  }
+  $('fontFile').addEventListener('change', async event => {
+    const version = ++uploadVersion, file = event.detail?.files?.[0] || $('fontFile').files?.[0]
+    meta = null; uploading = !!file; update()
+    if (!file) { send({ type:'file' }); return }
+    if (file.size > 20*1024*1024) { uploading = false; send({ type:'file' }); message('Choose a font file smaller than 20 MB.',true); update(); return }
+    try {
+      message('Reading font limits…')
+      const buffer = await Promise.race([file.arrayBuffer(), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))])
+      if (version !== uploadVersion) return
+      send({ type:'file', bytes:Array.from(new Uint8Array(buffer)) })
+    } catch (e) { if (version === uploadVersion) { uploading = false; send({ type:'file' }); message('Could not read this font file. Try another file or use Manual entry.',true); update() } }
+  })
+  for (const id of ['startWeight','endWeight','mode']) $(id).addEventListener('change', () => { requested = params(); update() })
+  for (const id of ['startWeight','endWeight']) $(id).addEventListener('input', () => { update() })
+  $('source').addEventListener('change', event => {
+    if (busy) return
+    const value = typeof event.detail === 'string' ? event.detail : controlValue('source')
+    if (value !== 'manual' && value !== 'file') return
+    setValue('source', value)
+    requested = params(); constrain(); update(); message('')
+  })
+  $('reverse').addEventListener('click', () => { const p = params(); setValue('startWeight',p.endWeight); setValue('endWeight',p.startWeight); requested = params(); update() })
+  $('apply').addEventListener('click', () => {
+    if ($('apply').hasAttribute('disabled')) return
+    activeAction = 'apply'; busy = true; message('Applying font weights…')
+    send({ type:'apply', id:selection.id, characters:selection.characters, params:params(), groups:groups() }); update()
+  })
+  $('restore').addEventListener('click', () => { if (!$('restore').hasAttribute('disabled')) { activeAction = 'restore'; busy = true; message('Restoring original weights…'); send({ type:'restore' }); update() } })
+  window.addEventListener('message', event => {
+    const msg = event.data?.pluginMessage
+    if (!msg) return
+    if (msg.type === 'selection') {
+      connected = true; uploading = false
+      const changed = lastId !== msg.id, newFont = !meta && !!msg.meta
+      selection = msg; meta = msg.meta; lastId = msg.id
+      if (changed) { requested = { ...msg.params, source: msg.params.source || 'manual' }; message('') }
+      if (changed || newFont) constrain()
+      update()
+    } else if (msg.type === 'status') message(msg.text,msg.error)
+    else if (msg.type === 'busy') { busy = msg.busy; update() }
+  })
+  let lastHeight = 0
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => {
+    const height = Math.ceil($('plugin-root').getBoundingClientRect().height)
+    if (height !== lastHeight) { lastHeight = height; send({ type:'resize',height }) }
+  }).observe($('plugin-root'))
+  // Start independently of component registration: one missing control must never block selection detection.
+  send({ type:'ready' })
+  update()
+  for (const delay of [100,500,1500,4000]) setTimeout(() => { if (!connected) send({ type:'ready' }) },delay)
+  setTimeout(() => { if (!connected) message('Could not connect to the selected text. Close and reopen the plugin to try again.',true) },6000)
+  for (const tag of ['fig-input-number','fig-dropdown','fig-input-file','fig-button','fig-tabs']) customElements.whenDefined(tag).then(() => { constrain(); update() })
+  window.addEventListener('error', () => { message('Some controls could not load. Close and reopen the plugin to try again.',true) })
+})()
+</script>
+</body>
+</html>
