@@ -38,6 +38,8 @@ let showValues = false
 /** First letter shown in the bar window. */
 let barOffset = 0
 let liveTimer: ReturnType<typeof setTimeout> | undefined
+/** The user edited while the axis ranges were still being measured; write once they arrive. */
+let pendingLive = false
 /** Which progression the controls edit: null = shared, otherwise a detached axis tag. */
 let target: string | null = null
 let editingRange: string | null = null
@@ -430,7 +432,9 @@ function scheduleLive(): void {
   liveTimer = setTimeout(() => {
     liveTimer = undefined
     const gs = groups(), count = gs.reduce((n, g) => n + g.length, 0)
-    if (!selection || selection.error || selection.detecting || busy || validation() || !enabledTags().length || !count || !segmenter) return
+    if (selection && !selection.error && (selection.detecting || !adjustable().length)) { pendingLive = true; return }
+    if (!selection || selection.error || busy || validation() || !enabledTags().length || !count || !segmenter) return
+    pendingLive = false
     send({ type: 'live', id: selection.id, characters: selection.characters, settings: payload(), groups: gs })
   }, 16)
 }
@@ -517,7 +521,7 @@ window.addEventListener('message', event => {
     // axes but keep the progression the user has dialled in.
     const newFont = !newLayer && !!msg.family && !!lastFamily && lastFamily !== msg.family
     selection = msg as Selection; lastId = msg.id; lastFamily = msg.family || lastFamily
-    if (newLayer || newFont) barOffset = 0
+    if (newLayer || newFont) { barOffset = 0; pendingLive = false }
     if (newLayer) {
       target = null; editingRange = null
       settings = msg.settings ? JSON.parse(JSON.stringify(msg.settings)) : { version: 2, axes: {}, shape: { ...DEFAULT_SHAPE }, mode: settings.mode }
@@ -529,6 +533,8 @@ window.addEventListener('message', event => {
     }
     reconcile()
     update()
+    // Edits made while measuring were held back; apply them now that the ranges are known.
+    if (pendingLive && !selection.detecting && adjustable().length) scheduleLive()
   } else if (msg.type === 'detect-progress') {
     if (selection && selection.family === msg.family) { selection.detecting = true; selection.progress = { done: msg.done, total: msg.total, tag: msg.tag }; renderDetection() }
   } else if (msg.type === 'live-applied') {

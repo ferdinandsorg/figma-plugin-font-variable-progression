@@ -3,8 +3,11 @@ import { DEFAULT_SHAPE, Settings, Shape, computeValues } from './engine'
 import { FontMeta, parseFont } from './fontfile'
 import { cachedRanges, detectRanges } from './probe'
 
-const TOOL_ID = 'f5640f22-a592-4f4f-8903-2397d80a7bee'
-const KEY = TOOL_ID + ':state'
+// Plugin data and clientStorage are already scoped to the plugin ID by Figma, so the keys don't
+// contain it: changing the ID in manifest.json is all a new ID needs.
+const KEY = 'state'
+/** Must match `relaunchButtons[].command` in manifest.json. */
+const RELAUNCH_COMMAND = 'edit'
 type FontRange = { start: number; end: number; fontName: FontName }
 type Original = { characters: string; ranges: FontRange[] }
 type Saved = { version: 2; settings: Settings; original: Original }
@@ -302,7 +305,7 @@ async function applyLive(msg: Message): Promise<void> {
   const firstChange = !saved || saved.original.characters !== node.characters
   for (const r of mergePlan(buildPlan(groups, settings, before))) node.setRangeFontName(r.start, r.end, r.font)
   node.setPluginData(KEY, JSON.stringify({ version: 2, settings, original } satisfies Saved))
-  if (firstChange) node.setRelaunchData({ ...node.getRelaunchData(), [TOOL_ID]: 'Font Axis Gradient' })
+  if (firstChange) node.setRelaunchData({ ...node.getRelaunchData(), [RELAUNCH_COMMAND]: 'Font Axis Gradient' })
   liveDirty = true
   figma.ui.postMessage({ type: 'live-applied', id: node.id, canRestore: true })
 }

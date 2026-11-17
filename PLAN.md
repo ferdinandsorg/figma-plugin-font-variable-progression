@@ -119,7 +119,8 @@ Empfehlung: **A + D**, C als Option.
 - ✅ Kurve als `fig-easing-curve` (Bezier, Presets + Ziehen); Engine wertet `Shape.bezier` aus (alte Presets werden auf Bezier abgebildet).
 - ✅ Slider-Wertfeld wieder als native FigUI3-Einheit (Spur | Wert, 24 px); die 32-px-Regel gilt nicht mehr für das Slider-Feld.
 - ✅ Chips heißen nach den Achsen, die sie steuern: eine verknüpfte Achse → ihr Name; mehrere → Ketten-Symbol + „Width + Grade“ bzw. „Width, Grade +2“ (Tooltip listet alle). Kein abstraktes „Shared“ mehr.
-- ✅ Umbenannt in **Font Axis Gradient** (Plugin-ID und Speicher-Keys unverändert).
+- ✅ Umbenannt in **Font Axis Gradient**.
+- ✅ Eigene Plugin-ID `1704649262901833656` (über „New plugin…“ von Figma vergeben); Speicher-Schlüssel und Relaunch-Befehl hängen nicht mehr an der ID.
 - Ursprünglicher Plan:
 - Pro Achse ein aufklappbarer Block: Schalter, Bereich, `fig-slider` für Base/Peak.
 - Globale Steuerung: Peak position (Slider + Klick auf Buchstaben), Falloff, Curve, Entire text / Each word.

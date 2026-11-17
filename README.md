@@ -32,3 +32,20 @@ https://www.figma.com/design/inLqueV9Xq6S57WpgwW0vq
 - `src/probe.ts`, `src/axes.ts`, `src/fontfile.ts` – Achsen-Erkennung
 - `scripts/build.mjs` – Build
 - `.claude/skills/figui3`, `.claude/skills/propskit` – Agent-Skills aus `@rogieking/figui3` (MIT)
+
+## Community-Assets
+
+Icon, Cover und Carousel-Bilder zum Veröffentlichen liegen fertig in `assets/community/`, Texte und Gestaltungsregeln in [docs/community-listing.md](docs/community-listing.md).
+
+## Plugin-ID
+
+Figma vergibt Plugin-IDs; sie lassen sich nicht selbst erzeugen. Die ID steht nur in `manifest.json` (`"id"`), der Code hängt nicht davon ab.
+
+Neue ID holen:
+1. Figma Desktop → **Plugins → Development → New plugin…** → beliebige Vorlage, Name „Font Axis Gradient“, in einen temporären Ordner speichern.
+2. Aus dem dort erzeugten `manifest.json` den Wert von `"id"` kopieren und hier in `manifest.json` eintragen. Den temporären Ordner danach löschen.
+3. In Figma das alte Development-Plugin entfernen und dieses `manifest.json` neu importieren.
+
+Alternativ vergibt Figma beim ersten Veröffentlichen eine neue ID.
+
+Folge eines ID-Wechsels: Gespeicherte Original-Zustände („Restore“) bereits bearbeiteter Ebenen, gemessene Achsenbereiche und manuell korrigierte Bereiche gehören zur alten ID und werden nicht mehr gefunden (Bereiche werden einfach neu gemessen).

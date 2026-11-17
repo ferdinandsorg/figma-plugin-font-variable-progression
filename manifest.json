@@ -1,6 +1,6 @@
 {
   "name": "Font Axis Gradient",
-  "id": "f5640f22-a592-4f4f-8903-2397d80a7bee",
+  "id": "1704649262901833656",
   "api": "1.0.0",
   "main": "dist/code.js",
   "ui": "dist/ui.html",
@@ -9,7 +9,7 @@
   "networkAccess": { "allowedDomains": ["none"] },
   "relaunchButtons": [
     {
-      "command": "f5640f22-a592-4f4f-8903-2397d80a7bee",
+      "command": "edit",
       "name": "Font Axis Gradient"
     }
   ]
